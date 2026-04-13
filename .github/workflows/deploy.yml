@@ -90,3 +90,22 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         run: wrangler pages deploy dist/ --project-name=stock-ai-dashboard --commit-dirty=true
+
+  # ─── Deploy Landing Page ────────────────────────
+  deploy-landing:
+    name: Deploy Landing Page
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy landing page to Cloudflare Pages
+        run: wrangler pages deploy landing/ --project-name=vegatrade-landing --commit-dirty=true
