@@ -566,7 +566,7 @@ Signals: ${signals.slice(0,5).map(s=>`${s.sym} ${s.action}(${(s.strength*100).to
 User asks: ${msg}`;
     try{
       const chatMsgs = [...aiMsgs.slice(-6).map(m=>({role:m.role,content:m.content})),{role:"user",content:contextMsg}];
-      const data = await api.chat(chatMsgs, selSym, "sonnet-4.6");
+      const data = await api.chat(chatMsgs, selSym, aiModel);
       setAiMsgs(prev=>[...prev,{role:"assistant",content:data.response||"No response received.",ts:fmt.t()}]);
     }catch(e){
       setAiMsgs(prev=>[...prev,{role:"assistant",content:`⚠️ AI Error: ${e.message}. Check backend connection.`,ts:fmt.t()}]);
@@ -1039,11 +1039,21 @@ User asks: ${msg}`;
           <div style={S.ct}>VEGA AI — TRADING INTELLIGENCE</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             <select value={aiModel} onChange={e=>setAiModel(e.target.value)} style={{...S.sel,width:"auto",padding:"3px 8px",fontSize:"9px"}}>
-              <option value="sonnet-4.6">Vega Pro</option>
-              <option value="opus-4.6">Vega Ultra</option>
-              <option value="haiku-4.5">Vega Lite</option>
+              <optgroup label="Claude (Anthropic)">
+                <option value="sonnet-4.6">Claude Sonnet 4.6</option>
+                <option value="opus-4.6">Claude Opus 4.6</option>
+                <option value="haiku-4.5">Claude Haiku 4.5</option>
+              </optgroup>
+              <optgroup label="Gemini (Google)">
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              </optgroup>
+              <optgroup label="GPT (OpenAI)">
+                <option value="gpt-5.4">GPT-5.4</option>
+                <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+              </optgroup>
             </select>
-            <span style={S.bdg(C.pu)}>{aiModel.split("-")[0].toUpperCase()}</span>
+            <span style={S.bdg(C.pu)}>{aiModel.includes("gemini")?"GEMINI":aiModel.includes("gpt")?"GPT":aiModel.split("-")[0].toUpperCase()}</span>
           </div>
         </div>
         <div style={{flex:1,overflow:"auto",marginBottom:8}}>

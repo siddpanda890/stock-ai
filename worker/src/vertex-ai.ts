@@ -95,25 +95,60 @@ async function getAccessToken(serviceAccountJson: string): Promise<string> {
   return tokenData.access_token;
 }
 
-// Available Vega AI models
-export const MODELS = {
+// Available Vega AI models — Claude (Anthropic via Vertex AI)
+export const CLAUDE_MODELS = {
   "opus-4.6": "claude-opus-4-6@20250514",
   "sonnet-4.6": "claude-sonnet-4-6@20250514",
   "haiku-4.5": "claude-haiku-4-5-20251001",
 } as const;
 
-export type ModelKey = keyof typeof MODELS;
+// Gemini models (Google via Vertex AI — same project, different publisher)
+export const GEMINI_MODELS = {
+  "gemini-2.5-pro": "gemini-2.5-pro",
+  "gemini-2.5-flash": "gemini-2.5-flash",
+} as const;
 
-// Call Vega AI model
-export async function callVertexAI(
+// OpenAI models (direct API)
+export const OPENAI_MODELS = {
+  "gpt-5.4": "gpt-5.4",
+  "gpt-5.4-mini": "gpt-5.4-mini",
+} as const;
+
+// Combined model map for backwards compat
+export const MODELS = {
+  ...CLAUDE_MODELS,
+  ...GEMINI_MODELS,
+  ...OPENAI_MODELS,
+} as const;
+
+export type ModelKey = keyof typeof MODELS;
+export type ClaudeModelKey = keyof typeof CLAUDE_MODELS;
+export type GeminiModelKey = keyof typeof GEMINI_MODELS;
+export type OpenAIModelKey = keyof typeof OPENAI_MODELS;
+
+function isClaudeModel(model: ModelKey): model is ClaudeModelKey {
+  return model in CLAUDE_MODELS;
+}
+function isGeminiModel(model: ModelKey): model is GeminiModelKey {
+  return model in GEMINI_MODELS;
+}
+function isOpenAIModel(model: ModelKey): model is OpenAIModelKey {
+  return model in OPENAI_MODELS;
+}
+
+// ═══════════════════════════════════════════════════════
+// CLAUDE via Vertex AI (Anthropic publisher)
+// ═══════════════════════════════════════════════════════
+
+export async function callClaudeVertexAI(
   config: VertexAIConfig,
   messages: Message[],
   systemPrompt: string,
-  model: ModelKey = "sonnet-4.6",
+  model: ClaudeModelKey = "sonnet-4.6",
   maxTokens: number = 4096
 ): Promise<VertexResponse> {
   const accessToken = await getAccessToken(config.serviceAccountJson);
-  const modelId = MODELS[model];
+  const modelId = CLAUDE_MODELS[model];
 
   const endpoint = `https://${config.location}-aiplatform.googleapis.com/v1/projects/${config.projectId}/locations/${config.location}/publishers/anthropic/models/${modelId}:rawPredict`;
 
@@ -135,27 +170,182 @@ export async function callVertexAI(
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Vertex AI error (${response.status}): ${err}`);
+    throw new Error(`Vertex AI Claude error (${response.status}): ${err}`);
   }
 
   return (await response.json()) as VertexResponse;
 }
 
-// Convenience: Call with fallback API provider
-export async function callClaude(
+// ═══════════════════════════════════════════════════════
+// GEMINI via Vertex AI (Google publisher)
+// ═══════════════════════════════════════════════════════
+
+async function callGeminiVertexAI(
   config: VertexAIConfig,
-  anthropicApiKey: string,
+  messages: Message[],
+  systemPrompt: string,
+  model: GeminiModelKey = "gemini-2.5-pro",
+  maxTokens: number = 4096
+): Promise<VertexResponse> {
+  const accessToken = await getAccessToken(config.serviceAccountJson);
+  const modelId = GEMINI_MODELS[model];
+
+  const endpoint = `https://${config.location}-aiplatform.googleapis.com/v1/projects/${config.projectId}/locations/${config.location}/publishers/google/models/${modelId}:generateContent`;
+
+  // Convert messages to Gemini format
+  const contents = messages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+
+  const body = {
+    contents,
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      temperature: 0.7,
+    },
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Vertex AI Gemini error (${response.status}): ${err}`);
+  }
+
+  const geminiResp = (await response.json()) as any;
+
+  // Normalize Gemini response → VertexResponse format
+  const text = geminiResp.candidates?.[0]?.content?.parts
+    ?.map((p: any) => p.text)
+    .join("") || "";
+  const usage = geminiResp.usageMetadata || {};
+
+  return {
+    content: [{ type: "text", text }],
+    model: modelId,
+    usage: {
+      input_tokens: usage.promptTokenCount || 0,
+      output_tokens: usage.candidatesTokenCount || 0,
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════
+// OPENAI GPT via direct API
+// ═══════════════════════════════════════════════════════
+
+async function callOpenAI(
+  apiKey: string,
+  messages: Message[],
+  systemPrompt: string,
+  model: OpenAIModelKey = "gpt-5.4",
+  maxTokens: number = 4096
+): Promise<VertexResponse> {
+  const openAIMessages = [
+    { role: "system" as const, content: systemPrompt },
+    ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+  ];
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODELS[model],
+      messages: openAIMessages,
+      max_tokens: maxTokens,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenAI API error (${response.status}): ${err}`);
+  }
+
+  const data = (await response.json()) as any;
+  const text = data.choices?.[0]?.message?.content || "";
+  const usage = data.usage || {};
+
+  return {
+    content: [{ type: "text", text }],
+    model: model,
+    usage: {
+      input_tokens: usage.prompt_tokens || 0,
+      output_tokens: usage.completion_tokens || 0,
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════
+// UNIFIED ROUTER — call any model through one function
+// ═══════════════════════════════════════════════════════
+
+// Legacy alias — routes to correct provider
+export async function callVertexAI(
+  config: VertexAIConfig,
   messages: Message[],
   systemPrompt: string,
   model: ModelKey = "sonnet-4.6",
   maxTokens: number = 4096
 ): Promise<VertexResponse> {
-  try {
-    return await callVertexAI(config, messages, systemPrompt, model, maxTokens);
-  } catch (vertexError) {
-    console.warn("Primary AI provider failed, falling back:", vertexError);
+  if (isGeminiModel(model)) {
+    return callGeminiVertexAI(config, messages, systemPrompt, model, maxTokens);
+  }
+  if (isClaudeModel(model)) {
+    return callClaudeVertexAI(config, messages, systemPrompt, model, maxTokens);
+  }
+  // OpenAI models shouldn't come through here, but handle gracefully
+  throw new Error(`Model ${model} requires OpenAI API key — use callAI() instead`);
+}
 
-    // Fallback to secondary API provider
+// ═══════════════════════════════════════════════════════
+// UNIVERSAL AI CALLER — routes to correct provider with fallbacks
+// ═══════════════════════════════════════════════════════
+
+export interface AIConfig {
+  vertex: VertexAIConfig;
+  anthropicApiKey: string;
+  openaiApiKey?: string;
+}
+
+export async function callAI(
+  config: AIConfig,
+  messages: Message[],
+  systemPrompt: string,
+  model: ModelKey = "sonnet-4.6",
+  maxTokens: number = 4096
+): Promise<VertexResponse> {
+  // ── OpenAI models → direct OpenAI API ──
+  if (isOpenAIModel(model)) {
+    if (!config.openaiApiKey) {
+      throw new Error(`OpenAI API key required for model ${model}`);
+    }
+    return callOpenAI(config.openaiApiKey, messages, systemPrompt, model, maxTokens);
+  }
+
+  // ── Gemini models → Vertex AI (Google publisher) ──
+  if (isGeminiModel(model)) {
+    return callGeminiVertexAI(config.vertex, messages, systemPrompt, model, maxTokens);
+  }
+
+  // ── Claude models → Vertex AI with Anthropic API fallback ──
+  try {
+    return await callClaudeVertexAI(config.vertex, messages, systemPrompt, model as ClaudeModelKey, maxTokens);
+  } catch (vertexError) {
+    console.warn("Vertex AI Claude failed, falling back to Anthropic API:", vertexError);
+
     const anthropicModel =
       model === "opus-4.6"
         ? "claude-opus-4-6"
@@ -166,7 +356,7 @@ export async function callClaude(
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "x-api-key": anthropicApiKey,
+        "x-api-key": config.anthropicApiKey,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
@@ -185,4 +375,19 @@ export async function callClaude(
 
     return (await response.json()) as VertexResponse;
   }
+}
+
+// Legacy alias — backwards compatible
+export async function callClaude(
+  config: VertexAIConfig,
+  anthropicApiKey: string,
+  messages: Message[],
+  systemPrompt: string,
+  model: ModelKey = "sonnet-4.6",
+  maxTokens: number = 4096
+): Promise<VertexResponse> {
+  return callAI(
+    { vertex: config, anthropicApiKey },
+    messages, systemPrompt, model, maxTokens
+  );
 }
