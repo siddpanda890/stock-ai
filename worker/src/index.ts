@@ -512,16 +512,34 @@ app.get("/api/user/portfolio", async (c) => {
     // Check alerts while we have prices
     const triggered = await checkAlerts(c.env.STOCK_AI_KV, userId, prices);
 
+    // Proper accounting:
+    // portfolioValue = cash + market value of holdings (NOT cost basis)
+    // unrealizedPnl = market value - cost basis (for open positions)
+    // realizedPnl = running total from all closed trades
+    const unrealizedPnl = totalValue - totalInvested;
+    const portfolioValue = portfolio.cash + totalValue;
+    const winRate = portfolio.totalTradeCount > 0
+      ? (portfolio.winCount / portfolio.totalTradeCount) * 100 : 0;
+
     return c.json({
       success: true,
       data: {
         holdings: enriched,
         trades: portfolio.trades.slice(0, 50),
         cash: portfolio.cash,
-        totalInvested,
-        totalValue,
-        totalPnl: totalValue - totalInvested,
-        totalPnlPercent: totalInvested > 0 ? ((totalValue - totalInvested) / totalInvested) * 100 : 0,
+        totalInvested,           // cost basis of open positions
+        totalValue,              // market value of open positions
+        unrealizedPnl,           // totalValue - totalInvested
+        unrealizedPnlPercent: totalInvested > 0 ? (unrealizedPnl / totalInvested) * 100 : 0,
+        realizedPnl: portfolio.realizedPnl,   // accumulated from closed trades
+        portfolioValue,          // cash + market value (true account value)
+        totalTradeCount: portfolio.totalTradeCount,
+        winCount: portfolio.winCount,
+        winRate,
+        // Legacy fields for backward compat
+        totalPnl: unrealizedPnl + portfolio.realizedPnl,
+        totalPnlPercent: (portfolio.cash + totalValue) > 0
+          ? ((portfolioValue - 100000) / 100000) * 100 : 0, // vs initial capital
         triggeredAlerts: triggered,
       },
     });
