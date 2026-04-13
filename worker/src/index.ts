@@ -78,7 +78,7 @@ type Bindings = {
   VERTEX_SERVICE_ACCOUNT_JSON: string;
   ANTHROPIC_API_KEY: string;
   GOOGLE_API_KEY: string;
-  OPENAI_API_KEY: string;
+  AZURE_OPENAI_API_KEY: string;
   CORS_ORIGIN: string;
   JWT_SECRET: string;
   STOCK_AI_KV: KVNamespace;
@@ -127,10 +127,12 @@ app.get("/api/models", (c) => {
       description = key.includes("flash") ? "Ultra-fast Gemini — quick scans"
         : "1M context, strong math/reasoning — deep analysis";
     } else {
-      provider = "OpenAI (GPT)";
-      tier = key.includes("mini") ? "lite" : "pro";
-      description = key.includes("mini") ? "Fast & affordable GPT — quick checks"
-        : "Frontier GPT model — comprehensive analysis";
+      provider = "OpenAI via Azure";
+      tier = key === "gpt-5.4-pro" ? "ultra" : key === "gpt-5.4" ? "pro" : key === "o4-mini" ? "reasoning" : "lite";
+      description = key === "gpt-5.4-pro" ? "Best GPT reasoning — deep complex analysis"
+        : key === "gpt-5.4" ? "Strong GPT general — fast comprehensive analysis"
+        : key === "o4-mini" ? "Fast reasoning model — logic-heavy tasks"
+        : "Fast & cheap GPT — quick scans";
     }
     return { key: k, provider, tier, description, available: true };
   });
@@ -278,7 +280,7 @@ app.post("/api/analyze", async (c) => {
     ]);
     const indicators = calculateIndicators(historicalData);
     const analysis = await analyzeStock(
-      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: c.env.OPENAI_API_KEY },
+      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY: c.env.AZURE_OPENAI_API_KEY },
       quote, historicalData, indicators, model
     );
 
@@ -350,7 +352,7 @@ app.post("/api/chat", async (c) => {
     }
 
     const response = await chat(
-      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: c.env.OPENAI_API_KEY },
+      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY: c.env.AZURE_OPENAI_API_KEY },
       body.messages, stockContext, model
     );
     return c.json({ success: true, data: { response, model } });

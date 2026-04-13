@@ -108,10 +108,12 @@ export const GEMINI_MODELS = {
   "gemini-2.5-flash": "gemini-2.5-flash",
 } as const;
 
-// OpenAI models (direct API)
+// OpenAI models via Azure (Chat Completions API + Responses API)
 export const OPENAI_MODELS = {
-  "gpt-5.4": "gpt-5.4",
-  "gpt-5.4-mini": "gpt-5.4-mini",
+  "gpt-5.4-pro": "gpt-5.4-pro",   // Best reasoning — Responses API
+  "gpt-5.4": "gpt-5.4",           // Strong general — Responses API
+  "o4-mini": "o4-mini",           // Fast reasoning — Chat Completions (Foundry)
+  "gpt-4.1": "gpt-4.1",          // Fast & cheap — Chat Completions (Foundry)
 } as const;
 
 // Combined model map for backwards compat
@@ -240,52 +242,136 @@ async function callGeminiVertexAI(
 }
 
 // ═══════════════════════════════════════════════════════
-// OPENAI GPT via direct API
+// OPENAI GPT via Azure (two endpoints)
+//   - Foundry (Chat Completions): gpt-4.1, o4-mini
+//   - Classic (Responses API): gpt-5.4, gpt-5.4-pro
 // ═══════════════════════════════════════════════════════
 
-async function callOpenAI(
+const AZURE_FOUNDRY_BASE = "https://openai-image15-resource.services.ai.azure.com";
+const AZURE_CLASSIC_BASE = "https://openai-image15-resource.openai.azure.com";
+
+// Models that use Responses API (GPT-5.x series)
+const RESPONSES_API_MODELS = new Set(["gpt-5.4", "gpt-5.4-pro"]);
+// Reasoning models — no temperature, use max_completion_tokens
+const REASONING_MODELS = new Set(["o4-mini"]);
+
+// Chat Completions API (gpt-4.1, o4-mini via Foundry)
+async function callAzureChatCompletions(
   apiKey: string,
   messages: Message[],
   systemPrompt: string,
-  model: OpenAIModelKey = "gpt-5.4",
-  maxTokens: number = 4096
+  model: OpenAIModelKey,
+  maxTokens: number
 ): Promise<VertexResponse> {
+  const deployment = OPENAI_MODELS[model];
+  const isReasoning = REASONING_MODELS.has(model);
+
   const openAIMessages = [
     { role: "system" as const, content: systemPrompt },
     ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const endpoint = `${AZURE_FOUNDRY_BASE}/openai/deployments/${deployment}/chat/completions?api-version=2024-12-01-preview`;
+
+  const body: any = { messages: openAIMessages };
+  if (isReasoning) {
+    body.max_completion_tokens = maxTokens;
+  } else {
+    body.max_tokens = maxTokens;
+    body.temperature = 0.7;
+  }
+
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODELS[model],
-      messages: openAIMessages,
-      max_tokens: maxTokens,
-      temperature: 0.7,
-    }),
+    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${err}`);
+    throw new Error(`Azure ChatCompletions error (${response.status}): ${err}`);
   }
 
   const data = (await response.json()) as any;
-  const text = data.choices?.[0]?.message?.content || "";
-  const usage = data.usage || {};
-
   return {
-    content: [{ type: "text", text }],
-    model: model,
+    content: [{ type: "text", text: data.choices?.[0]?.message?.content || "" }],
+    model: data.model || model,
     usage: {
-      input_tokens: usage.prompt_tokens || 0,
-      output_tokens: usage.completion_tokens || 0,
+      input_tokens: data.usage?.prompt_tokens || 0,
+      output_tokens: data.usage?.completion_tokens || 0,
     },
   };
+}
+
+// Responses API (gpt-5.4, gpt-5.4-pro via Classic endpoint)
+async function callAzureResponses(
+  apiKey: string,
+  messages: Message[],
+  systemPrompt: string,
+  model: OpenAIModelKey,
+  maxTokens: number
+): Promise<VertexResponse> {
+  const endpoint = `${AZURE_CLASSIC_BASE}/openai/responses?api-version=2025-03-01-preview`;
+
+  // Build input: system instructions + conversation as text
+  const conversationText = messages
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+    .join("\n\n");
+
+  const body: any = {
+    model: OPENAI_MODELS[model],
+    instructions: systemPrompt,
+    input: conversationText,
+    max_output_tokens: maxTokens,
+    temperature: 0.7,
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Azure Responses API error (${response.status}): ${err}`);
+  }
+
+  const data = (await response.json()) as any;
+
+  // Extract text from Responses API output format
+  let text = "";
+  for (const item of data.output || []) {
+    if (item.type === "message") {
+      for (const c of item.content || []) {
+        if (c.type === "output_text") text += c.text;
+      }
+    }
+  }
+
+  const usage = data.usage || {};
+  return {
+    content: [{ type: "text", text }],
+    model: data.model || model,
+    usage: {
+      input_tokens: usage.input_tokens || 0,
+      output_tokens: usage.output_tokens || 0,
+    },
+  };
+}
+
+// Unified Azure OpenAI caller — routes to correct API
+async function callAzureOpenAI(
+  apiKey: string,
+  messages: Message[],
+  systemPrompt: string,
+  model: OpenAIModelKey = "gpt-4.1",
+  maxTokens: number = 4096
+): Promise<VertexResponse> {
+  if (RESPONSES_API_MODELS.has(model)) {
+    return callAzureResponses(apiKey, messages, systemPrompt, model, maxTokens);
+  }
+  return callAzureChatCompletions(apiKey, messages, systemPrompt, model, maxTokens);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -317,7 +403,7 @@ export async function callVertexAI(
 export interface AIConfig {
   vertex: VertexAIConfig;
   anthropicApiKey: string;
-  openaiApiKey?: string;
+  azureOpenaiApiKey?: string;
 }
 
 export async function callAI(
@@ -327,12 +413,12 @@ export async function callAI(
   model: ModelKey = "sonnet-4.6",
   maxTokens: number = 4096
 ): Promise<VertexResponse> {
-  // ── OpenAI models → direct OpenAI API ──
+  // ── OpenAI models → Azure OpenAI ──
   if (isOpenAIModel(model)) {
-    if (!config.openaiApiKey) {
-      throw new Error(`OpenAI API key required for model ${model}`);
+    if (!config.azureOpenaiApiKey) {
+      throw new Error(`Azure OpenAI API key required for model ${model}`);
     }
-    return callOpenAI(config.openaiApiKey, messages, systemPrompt, model, maxTokens);
+    return callAzureOpenAI(config.azureOpenaiApiKey, messages, systemPrompt, model, maxTokens);
   }
 
   // ── Gemini models → Vertex AI (Google publisher) ──
