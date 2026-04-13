@@ -578,6 +578,20 @@ app.get("/api/user/portfolio", async (c) => {
   }
 });
 
+// Reset portfolio to clean state (for fixing corrupted data)
+app.post("/api/user/portfolio/reset", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const body = await c.req.json().catch(() => ({}));
+    const startingCash = body.cash || 100000;
+    const clean = { holdings: [], trades: [], cash: startingCash, realizedPnl: 0, totalTradeCount: 0, winCount: 0 };
+    await c.env.STOCK_AI_KV.put(`portfolio:${userId}`, JSON.stringify(clean));
+    return c.json({ success: true, data: { message: "Portfolio reset", cash: startingCash } });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
 app.post("/api/user/portfolio/buy", async (c) => {
   try {
     const userId = c.get("userId");
