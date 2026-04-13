@@ -1,0 +1,965 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart
+} from "recharts";
+
+// ═══════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const NSE_STOCKS = [
+  { sym:"RELIANCE",   name:"Reliance Industries", basePrice:2847.5,  sector:"Energy"       },
+  { sym:"TCS",        name:"Tata Consultancy",     basePrice:3542.0,  sector:"IT"           },
+  { sym:"HDFCBANK",   name:"HDFC Bank",            basePrice:1623.4,  sector:"Finance"      },
+  { sym:"INFY",       name:"Infosys",              basePrice:1478.2,  sector:"IT"           },
+  { sym:"ICICIBANK",  name:"ICICI Bank",           basePrice:1234.6,  sector:"Finance"      },
+  { sym:"HINDUNILVR", name:"HUL",                  basePrice:2234.8,  sector:"FMCG"         },
+  { sym:"ITC",        name:"ITC Ltd",              basePrice:467.3,   sector:"FMCG"         },
+  { sym:"WIPRO",      name:"Wipro",                basePrice:534.9,   sector:"IT"           },
+  { sym:"AXISBANK",   name:"Axis Bank",            basePrice:1123.4,  sector:"Finance"      },
+  { sym:"BAJFINANCE", name:"Bajaj Finance",        basePrice:7234.5,  sector:"Finance"      },
+  { sym:"TATAMOTORS", name:"Tata Motors",          basePrice:823.4,   sector:"Auto"         },
+  { sym:"SUNPHARMA",  name:"Sun Pharma",           basePrice:1634.2,  sector:"Pharma"       },
+  { sym:"ADANIENT",   name:"Adani Ent",            basePrice:2456.7,  sector:"Conglomerate" },
+  { sym:"MARUTI",     name:"Maruti Suzuki",        basePrice:12345.6, sector:"Auto"         },
+  { sym:"KOTAKBANK",  name:"Kotak Bank",           basePrice:1876.3,  sector:"Finance"      },
+];
+const INDICES = [
+  { name:"NIFTY 50", base:22567.2 },{ name:"SENSEX", base:74155.8 },
+  { name:"BANKNIFTY", base:48234.6 },{ name:"NIFTY IT", base:34567.1 },
+];
+const SMETA = {
+  momentum:   { name:"Momentum",       color:"#00e87a", desc:"EMA 9/21 crossover + RSI"         },
+  supertrend: { name:"SuperTrend",     color:"#ffab30", desc:"ATR flip signals"                  },
+  mean_rev:   { name:"Mean Reversion", color:"#5b9ef7", desc:"Bollinger Band extremes"           },
+  breakout:   { name:"Breakout",       color:"#f472b6", desc:"Volume + N20 high/low break"       },
+  macd:       { name:"MACD",           color:"#a78bfa", desc:"MACD signal-line crossover"        },
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  TECHNICAL INDICATORS
+// ═══════════════════════════════════════════════════════════════
+const TA = {
+  ema(c, p) {
+    if (c.length < p) return c.at(-1)??0;
+    const k = 2/(p+1); let e = c.slice(0,p).reduce((a,b)=>a+b,0)/p;
+    for (let i=p;i<c.length;i++) e = c[i]*k + e*(1-k); return e;
+  },
+  rsi(c, p=14) {
+    if (c.length<p+1) return 50;
+    let g=0,l=0;
+    for (let i=c.length-p;i<c.length;i++){const d=c[i]-c[i-1]; d>0?g+=d:l-=d;}
+    return 100-100/(1+g/(l||1e-6));
+  },
+  atr(candles, p=14) {
+    if (candles.length<2) return candles[0]?.close*0.015??10;
+    const trs=candles.slice(1).map((c,i)=>Math.max(c.high-c.low,Math.abs(c.high-candles[i].close),Math.abs(c.low-candles[i].close)));
+    return trs.slice(-p).reduce((a,b)=>a+b,0)/Math.min(p,trs.length);
+  },
+  bollinger(c, p=20, m=2) {
+    if (c.length<p) return {upper:c.at(-1)*1.02,middle:c.at(-1),lower:c.at(-1)*0.98};
+    const sl=c.slice(-p), mid=sl.reduce((a,b)=>a+b,0)/p;
+    const sd=Math.sqrt(sl.reduce((s,v)=>s+(v-mid)**2,0)/p);
+    return {upper:mid+m*sd, middle:mid, lower:mid-m*sd};
+  },
+  macd(c) {
+    if (c.length<26) return {macd:0,signal:0,hist:0};
+    const mv = TA.ema(c,12)-TA.ema(c,26);
+    const subs=c.slice(-9).map((_,i)=>{ const s=c.slice(0,c.length-8+i); return TA.ema(s,12)-TA.ema(s,26); });
+    const sig=subs.reduce((a,b)=>a+b,0)/subs.length;
+    return {macd:mv,signal:sig,hist:mv-sig};
+  },
+  supertrend(candles, p=10, m=3) {
+    if (candles.length<p+2) return {trend:1,line:candles.at(-1)?.close??0,atr:0};
+    const rc=candles.slice(-(p+5)); const a=TA.atr(rc,p);
+    const last=rc.at(-1); const hl2=(last.high+last.low)/2;
+    const upper=hl2+m*a, lower=hl2-m*a;
+    const trend=last.close>lower?1:last.close<upper?-1:rc.at(-2)?.close>lower?1:-1;
+    return {trend, line:trend===1?lower:upper, atr:a};
+  },
+  chandelier(candles, p=14, m=2.0) {
+    if (candles.length<p) return candles.at(-1)?.close*0.97??0;
+    return Math.max(...candles.slice(-p).map(c=>c.high)) - m*TA.atr(candles,p);
+  },
+  vwap(candles) {
+    let tv=0,v=0; candles.slice(-20).forEach(c=>{const tp=(c.high+c.low+c.close)/3; tv+=tp*c.volume; v+=c.volume;});
+    return tv/(v||1);
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  SIGNAL ENGINE
+// ═══════════════════════════════════════════════════════════════
+const SE = {
+  momentum(stock) {
+    const c=stock.candles.map(x=>x.close), p=stock;
+    const e9=TA.ema(c,9),e21=TA.ema(c,21),e9p=TA.ema(c.slice(0,-1),9),e21p=TA.ema(c.slice(0,-1),21);
+    const rsi=TA.rsi(c), price=c.at(-1), atr=TA.atr(p.candles);
+    const crossUp=e9p<=e21p&&e9>e21, crossDn=e9p>=e21p&&e9<e21;
+    if (crossUp&&rsi>45&&rsi<72) return {action:"BUY",  strength:Math.min(.95,(.72-rsi/100)+.55), reason:`EMA9↑EMA21 | RSI ${rsi.toFixed(0)}`, entry:price, sl:price-2*atr, target:price+3*atr};
+    if (crossDn&&rsi<55&&rsi>28) return {action:"SELL", strength:Math.min(.95,(rsi/100-.28)+.55), reason:`EMA9↓EMA21 | RSI ${rsi.toFixed(0)}`, entry:price, sl:price+2*atr, target:price-3*atr};
+    if (e9>e21&&rsi>55) return {action:"HOLD_LONG",strength:.35,reason:`Uptrend | spread ${(e9-e21).toFixed(1)}`,entry:price,sl:price-2*atr,target:price+3*atr};
+    return {action:"NONE",strength:0,reason:`No cross | RSI ${rsi.toFixed(0)}`};
+  },
+  supertrend(stock) {
+    const st=TA.supertrend(stock.candles,10,3), stP=TA.supertrend(stock.candles.slice(0,-1),10,3);
+    const rsi=TA.rsi(stock.candles.map(c=>c.close)), price=stock.candles.at(-1).close, atr=st.atr||TA.atr(stock.candles);
+    if (stP.trend===-1&&st.trend===1) return {action:"BUY",  strength:.88, reason:`ST flipped BULLISH | RSI ${rsi.toFixed(0)}`,entry:price,sl:st.line,target:price+3*atr};
+    if (stP.trend===1 &&st.trend===-1) return {action:"SELL", strength:.88, reason:`ST flipped BEARISH | RSI ${rsi.toFixed(0)}`,entry:price,sl:st.line,target:price-3*atr};
+    if (st.trend===1) return {action:"HOLD_LONG",strength:.3,reason:`ST bullish | line ₹${st.line.toFixed(0)}`,entry:price,sl:st.line,target:price+2*atr};
+    return {action:"NONE",strength:0,reason:"ST bearish"};
+  },
+  mean_rev(stock) {
+    const c=stock.candles.map(x=>x.close), bb=TA.bollinger(c), rsi=TA.rsi(c), price=c.at(-1), atr=TA.atr(stock.candles);
+    if (price<=bb.lower*1.005&&rsi<35) return {action:"BUY",  strength:Math.min(.92,.6+(35-rsi)/100), reason:`Lower BB | RSI ${rsi.toFixed(0)} oversold`,entry:price,sl:price-1.5*atr,target:bb.middle};
+    if (price>=bb.upper*.995&&rsi>65) return {action:"SELL", strength:Math.min(.92,.6+(rsi-65)/100), reason:`Upper BB | RSI ${rsi.toFixed(0)} overbought`,entry:price,sl:price+1.5*atr,target:bb.middle};
+    return {action:"NONE",strength:0,reason:`BB%: ${Math.round(((price-bb.lower)/(bb.upper-bb.lower))*100)}%`};
+  },
+  breakout(stock) {
+    const cv=stock.candles, price=cv.at(-1).close, vol=cv.at(-1).volume;
+    const avgV=cv.slice(-20).reduce((s,c)=>s+c.volume,0)/20;
+    const h20=Math.max(...cv.slice(-21,-1).map(c=>c.high)), l20=Math.min(...cv.slice(-21,-1).map(c=>c.low));
+    const atr=TA.atr(cv), vs=vol>avgV*1.5;
+    if (price>h20&&vs) return {action:"BUY",  strength:Math.min(.9,.65+(vol/avgV-1.5)*.15), reason:`20-bar break ↑ | vol ${(vol/avgV).toFixed(1)}x`,entry:price,sl:h20-atr,target:price+2.5*atr};
+    if (price<l20&&vs) return {action:"SELL", strength:Math.min(.9,.65+(vol/avgV-1.5)*.15), reason:`20-bar break ↓ | vol ${(vol/avgV).toFixed(1)}x`,entry:price,sl:l20+atr,target:price-2.5*atr};
+    return {action:"NONE",strength:0,reason:`Range: ${l20.toFixed(0)}–${h20.toFixed(0)}`};
+  },
+  macd(stock) {
+    const c=stock.candles.map(x=>x.close), curr=TA.macd(c), prev=TA.macd(c.slice(0,-1));
+    const rsi=TA.rsi(c), price=c.at(-1), atr=TA.atr(stock.candles);
+    const bullX=prev.macd<=prev.signal&&curr.macd>curr.signal&&curr.macd<0;
+    const bearX=prev.macd>=prev.signal&&curr.macd<curr.signal&&curr.macd>0;
+    if (bullX&&rsi<65) return {action:"BUY",  strength:.82,reason:`MACD bull cross <0 | RSI ${rsi.toFixed(0)}`,entry:price,sl:price-2*atr,target:price+3*atr};
+    if (bearX&&rsi>35) return {action:"SELL", strength:.82,reason:`MACD bear cross >0 | RSI ${rsi.toFixed(0)}`,entry:price,sl:price+2*atr,target:price-3*atr};
+    return {action:"NONE",strength:0,reason:`hist:${curr.hist.toFixed(2)}`};
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+function posSize(capital, riskPct, entry, sl) {
+  const rAmt=capital*(riskPct/100), rPerShare=Math.abs(entry-sl);
+  return Math.max(1, Math.floor(rAmt/(rPerShare||entry*.01)));
+}
+function makeCandle(prev, vol=.004) {
+  const drift=(Math.random()-.488)*prev.close*vol;
+  const open=prev.close, close=Math.max(open*.9,open+drift);
+  return { time:new Date().toLocaleTimeString("en-IN"), open, close,
+    high:Math.max(open,close)*(1+Math.random()*vol*.5),
+    low :Math.min(open,close)*(1-Math.random()*vol*.5),
+    volume:Math.floor(Math.random()*50000+8000) };
+}
+function genHistory(base, n=80) {
+  let last={close:base,high:base,low:base,open:base,volume:20000,time:""};
+  const arr=[];
+  for(let i=n;i>=0;i--){last=makeCandle(last,.005);last.time=new Date(Date.now()-i*60000).toLocaleTimeString("en-IN");arr.push({...last});}
+  return arr;
+}
+const fmt = {
+  inr:n=>"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}),
+  pct:n=>(n>=0?"+":"")+n.toFixed(2)+"%",
+  num:n=>n.toLocaleString("en-IN"),
+  t:()=>new Date().toLocaleTimeString("en-IN"),
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  APP
+// ═══════════════════════════════════════════════════════════════
+export default function VegaApp() {
+  // ── state ────────────────────────────────────────────────────
+  const [market, setMarket] = useState(() => {
+    const m={};
+    NSE_STOCKS.forEach(s=>{
+      const candles=genHistory(s.basePrice);
+      const closes=candles.map(c=>c.close);
+      m[s.sym]={...s,candles,last:candles.at(-1).close,prevClose:candles[0].close,change:0,changePct:0,
+        rsi:TA.rsi(closes),atr:TA.atr(candles),vwap:TA.vwap(candles)};
+    });
+    return m;
+  });
+  const [indices,  setIndices]  = useState(INDICES.map(i=>({...i,current:i.base,changePct:0})));
+  const [positions,setPositions]= useState([]);
+  const [orders,   setOrders]   = useState([]);
+  const [tradeLog, setTradeLog] = useState([]);
+  const [signals,  setSignals]  = useState([]);
+  const [execLog,  setExecLog]  = useState([]);
+  const [portfolio,setPortfolio]= useState({capital:500000,cash:500000,invested:0,dayPnL:0,peakCapital:500000,trades:0,wins:0});
+  const [engine,   setEngine]   = useState({
+    running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
+    riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
+  });
+  const [tab,      setTab]      = useState("engine");
+  const [selSym,   setSelSym]   = useState("RELIANCE");
+  const [settings, setSettings] = useState({growwToken:"",anthropicKey:"",paperMode:true});
+  const [aiMsgs,   setAiMsgs]   = useState([{role:"assistant",content:"⚡ VEGA online.\n\n5 strategy engines ready: Momentum, SuperTrend, Mean Reversion, Breakout, MACD.\nDynamic ATR Chandelier stop-loss active.\n\nPress ▶ START ENGINE on the Auto Engine tab to begin automated trading.",ts:fmt.t()}]);
+  const [aiInput,  setAiInput]  = useState("");
+  const [aiLoading,setAiLoading]= useState(false);
+  const [orderForm,setOrderForm]= useState({sym:"RELIANCE",qty:"1",side:"BUY"});
+  const aiEnd=useRef(null);
+  const posRef=useRef(positions), mktRef=useRef(market), portRef=useRef(portfolio), engRef=useRef(engine);
+  posRef.current=positions; mktRef.current=market; portRef.current=portfolio; engRef.current=engine;
+
+  // ── market tick ───────────────────────────────────────────────
+  useEffect(()=>{
+    const id=setInterval(()=>{
+      setMarket(prev=>{
+        const next={};
+        NSE_STOCKS.forEach(s=>{
+          const st=prev[s.sym], nc=makeCandle(st.candles.at(-1),.003+Math.random()*.004);
+          const candles=[...st.candles.slice(-99),nc], closes=candles.map(c=>c.close);
+          next[s.sym]={...st,candles,last:nc.close,change:nc.close-st.prevClose,changePct:((nc.close-st.prevClose)/st.prevClose)*100,rsi:TA.rsi(closes),atr:TA.atr(candles),vwap:TA.vwap(candles)};
+        });
+        return next;
+      });
+      setIndices(prev=>prev.map(i=>{const c=i.current+(Math.random()-.488)*i.current*.0008; return {...i,current:c,changePct:((c-i.base)/i.base)*100};}));
+    },1500);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // ── update positions ──────────────────────────────────────────
+  useEffect(()=>{
+    setPositions(prev=>prev.map(p=>{
+      const st=market[p.sym]; if(!st) return p;
+      const newSL=TA.chandelier(st.candles,14,engine.atrMult);
+      const sl=p.side==="LONG"?Math.max(p.sl,newSL):p.sl;
+      return {...p,ltp:st.last,sl,pnl:(st.last-p.entryPrice)*p.qty*(p.side==="LONG"?1:-1)};
+    }));
+  },[market]);
+
+  useEffect(()=>{
+    const dayPnL=positions.reduce((s,p)=>s+p.pnl,0), invested=positions.reduce((s,p)=>s+p.entryPrice*p.qty,0);
+    setPortfolio(prev=>({...prev,dayPnL,invested,peakCapital:Math.max(prev.peakCapital,prev.cash+invested+dayPnL)}));
+  },[positions]);
+
+  // ── execution helpers ─────────────────────────────────────────
+  const addLog=useCallback((msg,type="info")=>{
+    setExecLog(prev=>[{id:Date.now()+Math.random(),msg,type,ts:fmt.t()},...prev.slice(0,299)]);
+  },[]);
+
+  const closePos=useCallback((p,exitPrice,reason)=>{
+    const pnl=(exitPrice-p.entryPrice)*p.qty*(p.side==="LONG"?1:-1);
+    setPositions(prev=>prev.filter(x=>x.id!==p.id));
+    setTradeLog(prev=>[{id:Date.now(),sym:p.sym,side:p.side,qty:p.qty,entryPrice:p.entryPrice,exitPrice,pnl,reason,ts:fmt.t()},...prev.slice(0,299)]);
+    setPortfolio(prev=>({...prev,cash:prev.cash+exitPrice*p.qty+(pnl<0?pnl:0),trades:prev.trades+1,wins:prev.wins+(pnl>0?1:0)}));
+    const icon=reason==="SL_HIT"?"🛑":reason==="TARGET"?"🎯":"📤";
+    addLog(`${icon} EXIT ${p.sym} @ ${fmt.inr(exitPrice)} | P&L:${pnl>=0?"+":""}${fmt.inr(pnl)} [${reason}]`,pnl>=0?"profit":"loss");
+    if(!settings.paperMode&&settings.growwToken) apiOrder(p.sym,p.side==="LONG"?"SELL":"BUY",p.qty);
+  },[settings,addLog]);
+
+  const openPos=useCallback((sym,side,entry,sl,target,strategy,qty,reason)=>{
+    const pos={id:Date.now()+Math.random(),sym,side,qty,entryPrice:entry,sl,target,strategy,ltp:entry,pnl:0,entryTs:Date.now(),entryTime:fmt.t()};
+    setPositions(prev=>[...prev,pos]);
+    setPortfolio(prev=>({...prev,cash:prev.cash-entry*qty}));
+    setOrders(prev=>[{id:`${settings.paperMode?"P":"L"}-${Date.now()}`,sym,side:side==="LONG"?"BUY":"SELL",qty,price:entry.toFixed(2),status:"FILLED",strategy,ts:fmt.t()},...prev.slice(0,299)]);
+    addLog(`📈 ENTER ${side} ${sym} @ ${fmt.inr(entry)} | Qty:${qty} | SL:${fmt.inr(sl)} | T:${fmt.inr(target)} [${strategy}] ${reason}`,"buy");
+    if(!settings.paperMode&&settings.growwToken) apiOrder(sym,side==="LONG"?"BUY":"SELL",qty);
+  },[settings,addLog]);
+
+  // ── GROWW API ─────────────────────────────────────────────────
+  async function apiOrder(symbol,txn,qty){
+    try{
+      const r=await fetch("https://api.groww.in/v1/order/create",{method:"POST",
+        headers:{Authorization:`Bearer ${settings.growwToken}`,"Content-Type":"application/json","X-API-VERSION":"1.0"},
+        body:JSON.stringify({validity:"DAY",exchange:"NSE",transaction_type:txn,order_type:"MARKET",price:0,product:"CNC",quantity:qty,segment:"CASH",trading_symbol:symbol})});
+      const d=await r.json();
+      if(d.status!=="SUCCESS") addLog(`❌ Groww: ${d.error?.message||"error"}`,"loss");
+      else addLog(`✅ Groww order ${d.payload?.groww_order_id} accepted`,"info");
+    }catch(e){addLog(`❌ Groww API: ${e.message}`,"loss");}
+  }
+
+  // ── SCAN ENGINE ───────────────────────────────────────────────
+  const runScan=useCallback(()=>{
+    const mkt=mktRef.current, pos=posRef.current, port=portRef.current, eng=engRef.current;
+
+    // 1. SL / Target / Exit-signal check
+    const toClose=[];
+    pos.forEach(p=>{
+      const st=mkt[p.sym]; if(!st) return;
+      const ltp=st.last;
+      if(p.side==="LONG"  && ltp<=p.sl)     {toClose.push({p,ltp,reason:"SL_HIT"});return;}
+      if(p.side==="SHORT" && ltp>=p.sl)     {toClose.push({p,ltp,reason:"SL_HIT"});return;}
+      if(p.side==="LONG"  && ltp>=p.target) {toClose.push({p,ltp,reason:"TARGET"});return;}
+      if(p.side==="SHORT" && ltp<=p.target) {toClose.push({p,ltp,reason:"TARGET"});return;}
+      // strategy exit
+      Object.entries(eng.strategies).forEach(([id,on])=>{
+        if(!on||!SE[id]) return;
+        const sig=SE[id](st);
+        if(p.side==="LONG"  && sig.action==="SELL" && sig.strength>=.75) toClose.push({p,ltp,reason:`EXIT:${id}`});
+        if(p.side==="SHORT" && sig.action==="BUY"  && sig.strength>=.75) toClose.push({p,ltp,reason:`EXIT:${id}`});
+      });
+    });
+    // deduplicate closes
+    const closedIds=new Set();
+    toClose.forEach(({p,ltp,reason})=>{if(!closedIds.has(p.id)){closedIds.add(p.id);closePos({...p,ltp},ltp,reason);}});
+
+    // 2. Daily loss halt
+    const dd=port.peakCapital>0?((port.peakCapital-(port.cash+port.invested+port.dayPnL))/port.peakCapital)*100:0;
+    if(dd>=eng.dailyLossLimit){setEngine(e=>({...e,running:false}));addLog(`⛔ Daily loss limit ${eng.dailyLossLimit}% hit. Engine halted.`,"loss");return;}
+
+    // 3. Scan for entries
+    const alive=pos.filter(p=>!closedIds.has(p.id));
+    if(alive.length>=eng.maxPositions) return;
+
+    const liveSigs=[];
+    NSE_STOCKS.forEach(s=>{
+      const st=mkt[s.sym]; if(!st) return;
+      if(alive.find(p=>p.sym===s.sym)) return;
+      Object.entries(eng.strategies).forEach(([id,on])=>{
+        if(!on||!SE[id]) return;
+        const sig=SE[id](st);
+        if(sig.action!=="NONE") liveSigs.push({sym:s.sym,strategy:id,...sig,ltp:st.last,ts:fmt.t()});
+        if((sig.action==="BUY"||(sig.action==="SELL"&&eng.allowShort))&&sig.strength>=eng.minStrength){
+          if(alive.length>=eng.maxPositions) return;
+          const side=sig.action==="BUY"?"LONG":"SHORT";
+          const qty=posSize(port.cash,eng.riskPct,sig.entry,sig.sl);
+          if(sig.entry*qty>port.cash*.9||qty<1) return;
+          alive.push({sym:s.sym,id:Date.now(),side}); // optimistic push to prevent double-entry in same scan
+          openPos(s.sym,side,sig.entry,sig.sl,sig.target,id,qty,sig.reason);
+        }
+      });
+    });
+    setSignals(liveSigs.filter(s=>s.action!=="NONE"&&s.action!=="HOLD_LONG").sort((a,b)=>b.strength-a.strength).slice(0,25));
+  },[closePos,openPos,addLog]);
+
+  // ── engine timer ──────────────────────────────────────────────
+  const timerRef=useRef(null);
+  useEffect(()=>{
+    clearInterval(timerRef.current);
+    if(!engine.running) return;
+    addLog("⚡ Auto-trade engine STARTED","info");
+    runScan();
+    timerRef.current=setInterval(runScan,engine.scanInterval*1000);
+    return ()=>clearInterval(timerRef.current);
+  },[engine.running,engine.scanInterval,runScan]);
+
+  // ── AI ────────────────────────────────────────────────────────
+  async function sendAI(msg){
+    if(!msg.trim()) return;
+    setAiMsgs(prev=>[...prev,{role:"user",content:msg,ts:fmt.t()}]);
+    setAiInput(""); setAiLoading(true);
+    const port=portRef.current, pos=posRef.current;
+    const sys=`You are VEGA — elite AI trading agent for NSE India.
+Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(port.dayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
+Positions: ${pos.map(p=>`${p.sym} ${p.side} ${p.qty}@₹${p.entryPrice.toFixed(0)} SL:₹${p.sl?.toFixed(0)} P&L:${fmt.inr(p.pnl)}`).join(" | ")||"none"}
+Signals: ${signals.slice(0,5).map(s=>`${s.sym} ${s.action}(${(s.strength*100).toFixed(0)}%) via ${s.strategy}`).join(" | ")||"none"}
+Be concise, use emojis, give INR levels.`;
+    try{
+      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+        headers:{"Content-Type":"application/json",...(settings.anthropicKey?{"x-api-key":settings.anthropicKey}:{})},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,system:sys,
+          messages:[...aiMsgs.slice(-6).map(m=>({role:m.role,content:m.content})),{role:"user",content:msg}]})});
+      const d=await r.json();
+      setAiMsgs(prev=>[...prev,{role:"assistant",content:d.content?.[0]?.text||"Add Anthropic API key in Settings.",ts:fmt.t()}]);
+    }catch{setAiMsgs(prev=>[...prev,{role:"assistant",content:"⚠️ Add Anthropic API key in Settings for full AI analysis.",ts:fmt.t()}]);}
+    setAiLoading(false);
+  }
+  useEffect(()=>{aiEnd.current?.scrollIntoView({behavior:"smooth"});},[aiMsgs]);
+
+  // ── manual order ──────────────────────────────────────────────
+  function submitOrder(e,forceSide){
+    e.preventDefault();
+    const side=forceSide||orderForm.side;
+    const st=market[orderForm.sym], price=st?.last||0, qty=Math.max(1,parseInt(orderForm.qty)||1);
+    const atr=st?.atr||price*.01;
+    if(side==="BUY"){
+      openPos(orderForm.sym,"LONG",price,price-engine.atrMult*atr,price+engine.atrMult*1.5*atr,"manual",qty,"Manual BUY");
+    } else {
+      const pos=positions.find(p=>p.sym===orderForm.sym);
+      if(pos) closePos({...pos,ltp:price},price,"MANUAL_EXIT");
+    }
+  }
+
+  // ── chart data ────────────────────────────────────────────────
+  const selSt=market[selSym];
+  const chartPts=selSt?.candles.slice(-50).map(c=>({t:c.time.slice(0,5),p:+c.close.toFixed(2),v:c.volume}))||[];
+  const selPos=positions.find(p=>p.sym===selSym);
+  const drawdown=portfolio.peakCapital>0?((portfolio.peakCapital-(portfolio.cash+portfolio.invested+portfolio.dayPnL))/portfolio.peakCapital)*100:0;
+  const winRate=portfolio.trades>0?(portfolio.wins/portfolio.trades*100).toFixed(0):"—";
+
+  // ── colours ───────────────────────────────────────────────────
+  const C={bg:"#090b0f",bg2:"#0d0f16",bg3:"#111420",bd:"#1a1f2e",tx:"#b8bfd0",mu:"#3a4055",
+           g:"#00e87a",r:"#ff3d5a",a:"#ffab30",b:"#5b9ef7",pu:"#a78bfa"};
+  const S={
+    app:{background:C.bg,color:C.tx,minHeight:"100vh",display:"flex",flexDirection:"column",fontFamily:"'JetBrains Mono','Fira Code',monospace",fontSize:"12px"},
+    topbar:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"7px 14px",display:"flex",alignItems:"center",gap:0},
+    logo:{color:C.g,fontWeight:700,fontSize:"16px",letterSpacing:"3px",marginRight:"20px",fontFamily:"sans-serif"},
+    nav:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"0 14px",display:"flex"},
+    nb:a=>({padding:"9px 15px",background:"none",border:"none",borderBottom:a?`2px solid ${C.g}`:"2px solid transparent",color:a?C.g:C.mu,cursor:"pointer",fontSize:"10px",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:"inherit",transition:"color .15s"}),
+    body:{flex:1,padding:"10px",display:"flex",gap:"10px",overflow:"hidden"},
+    card:{background:C.bg2,border:`1px solid ${C.bd}`,borderRadius:"4px",padding:"10px 12px"},
+    ct:{color:C.mu,fontSize:"8px",letterSpacing:"2px",textTransform:"uppercase",marginBottom:"8px",borderBottom:`1px solid ${C.bg3}`,paddingBottom:"5px"},
+    inp:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"3px",padding:"6px 8px",color:C.tx,fontSize:"11px",fontFamily:"inherit",width:"100%",boxSizing:"border-box",outline:"none"},
+    sel:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"3px",padding:"6px 8px",color:C.tx,fontSize:"11px",fontFamily:"inherit",width:"100%",outline:"none"},
+    btn:(col,fill)=>({background:fill?col+"22":"transparent",border:`1px solid ${col}`,borderRadius:"3px",color:col,padding:"6px 12px",cursor:"pointer",fontSize:"10px",fontFamily:"inherit",letterSpacing:"1px"}),
+    bdg:col=>({background:col+"18",border:`1px solid ${col}44`,borderRadius:"2px",color:col,padding:"2px 5px",fontSize:"9px",display:"inline-block"}),
+    row:(alt)=>({display:"grid",padding:"5px 6px",borderBottom:`1px solid ${C.bg3}`,alignItems:"center",background:alt?C.bg3+"66":"transparent"}),
+    dot:col=>({width:6,height:6,borderRadius:"50%",background:col,display:"inline-block",marginRight:5,boxShadow:`0 0 5px ${col}`}),
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  //  ENGINE TAB
+  // ════════════════════════════════════════════════════════════════
+  const EngineTab=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",gap:"10px",overflow:"auto"}}>
+      {/* KPIs */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"8px"}}>
+        {[
+          {l:"PORTFOLIO VALUE",v:fmt.inr(portfolio.cash+portfolio.invested+portfolio.dayPnL),c:C.tx},
+          {l:"DAY P&L",v:(portfolio.dayPnL>=0?"+":"")+fmt.inr(portfolio.dayPnL),c:portfolio.dayPnL>=0?C.g:C.r},
+          {l:"FREE CASH",v:fmt.inr(portfolio.cash),c:C.a},
+          {l:"WIN RATE",v:winRate+(portfolio.trades?"%":""),c:C.b},
+          {l:"DRAWDOWN",v:"-"+drawdown.toFixed(2)+"%",c:drawdown>2?C.r:C.mu},
+        ].map(k=>(
+          <div key={k.l} style={S.card}>
+            <div style={{fontSize:"8px",color:C.mu,letterSpacing:"1px",marginBottom:"4px"}}>{k.l}</div>
+            <div style={{fontSize:"18px",fontWeight:700,color:k.c,fontFamily:"sans-serif",letterSpacing:"-0.5px"}}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"250px 1fr 1fr",gap:"10px",flex:1,minHeight:0}}>
+        {/* Controls column */}
+        <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"auto"}}>
+          {/* Big toggle */}
+          <div style={S.card}>
+            <div style={S.ct}>AUTO-TRADE ENGINE</div>
+            <div onClick={()=>setEngine(e=>({...e,running:!e.running}))}
+              style={{border:`2px solid ${engine.running?C.r:C.g}`,borderRadius:"4px",padding:"14px",textAlign:"center",cursor:"pointer",background:engine.running?C.r+"12":C.g+"10",marginBottom:"10px",transition:"all .2s"}}>
+              <div style={{fontSize:"20px",color:engine.running?C.r:C.g,letterSpacing:"4px",fontWeight:700}}>{engine.running?"⛔  STOP":"▶  START"}</div>
+              <div style={{fontSize:"9px",color:C.mu,marginTop:"3px"}}>{engine.running?"scanning all stocks…":"idle — click to start"}</div>
+            </div>
+            <div style={{fontSize:"10px",color:C.mu,lineHeight:1.9}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Status</span><span style={{color:engine.running?C.g:C.mu}}><span style={S.dot(engine.running?C.g:C.mu)}/>{engine.running?"ACTIVE":"IDLE"}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Positions</span><span style={{color:C.tx}}>{positions.length}/{engine.maxPositions}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Signals found</span><span style={{color:C.a}}>{signals.length}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Scan every</span><span style={{color:C.b}}>{engine.scanInterval}s</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Mode</span><span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span></div>
+            </div>
+          </div>
+
+          {/* Strategy toggles */}
+          <div style={S.card}>
+            <div style={S.ct}>STRATEGIES</div>
+            {Object.entries(SMETA).map(([id,meta])=>(
+              <div key={id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${C.bg3}`}}>
+                <div>
+                  <div style={{color:engine.strategies[id]?meta.color:C.mu,fontSize:"11px",fontWeight:600}}>{meta.name}</div>
+                  <div style={{color:C.mu,fontSize:"8px"}}>{meta.desc}</div>
+                </div>
+                <div onClick={()=>setEngine(e=>({...e,strategies:{...e.strategies,[id]:!e.strategies[id]}}))}
+                  style={{width:32,height:16,background:engine.strategies[id]?meta.color+"33":C.bg3,border:`1px solid ${engine.strategies[id]?meta.color:C.bd}`,borderRadius:8,cursor:"pointer",position:"relative",flexShrink:0,transition:"all .2s"}}>
+                  <div style={{position:"absolute",top:2,left:engine.strategies[id]?16:2,width:10,height:10,borderRadius:"50%",background:engine.strategies[id]?meta.color:C.mu,transition:"left .2s"}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Risk sliders */}
+          <div style={S.card}>
+            <div style={S.ct}>RISK PARAMETERS</div>
+            {[
+              {k:"riskPct",      l:"Risk / Trade",     s:"%",  min:.5, max:5,  step:.5,  sc:1 },
+              {k:"atrMult",      l:"ATR SL Multiplier",s:"×",  min:1,  max:4,  step:.5,  sc:1 },
+              {k:"minStrength",  l:"Min Signal Conf",  s:"%",  min:50, max:95, step:5,   sc:100},
+              {k:"maxPositions", l:"Max Positions",    s:"",   min:1,  max:10, step:1,   sc:1 },
+              {k:"dailyLossLimit",l:"Daily Loss Halt", s:"%",  min:1,  max:10, step:.5,  sc:1 },
+              {k:"scanInterval", l:"Scan Interval",    s:"s",  min:3,  max:60, step:1,   sc:1 },
+            ].map(p=>(
+              <div key={p.k} style={{marginBottom:"8px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",marginBottom:"2px"}}>
+                  <span style={{color:C.mu}}>{p.l}</span>
+                  <span style={{color:C.a}}>{(engine[p.k]*(p.sc||1)).toFixed(p.step<1?1:0)}{p.s}</span>
+                </div>
+                <input type="range" min={p.min} max={p.max} step={p.step}
+                  value={engine[p.k]*(p.sc||1)}
+                  onChange={e=>setEngine(prev=>({...prev,[p.k]:parseFloat(e.target.value)/(p.sc||1)}))}
+                  style={{width:"100%",accentColor:C.a,height:"3px"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"6px"}}>
+              <span style={{color:C.mu,fontSize:"9px"}}>Allow Short Selling</span>
+              <div onClick={()=>setEngine(e=>({...e,allowShort:!e.allowShort}))}
+                style={{width:32,height:16,background:engine.allowShort?C.g+"33":C.bg3,border:`1px solid ${engine.allowShort?C.g:C.bd}`,borderRadius:8,cursor:"pointer",position:"relative"}}>
+                <div style={{position:"absolute",top:2,left:engine.allowShort?16:2,width:10,height:10,borderRadius:"50%",background:engine.allowShort?C.g:C.mu,transition:"left .2s"}}/>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Signal feed */}
+        <div style={{...S.card,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={S.ct}>LIVE SIGNAL FEED — {signals.length} signals</div>
+          <div style={{overflow:"auto",flex:1}}>
+            <div style={{...S.row(false),gridTemplateColumns:"72px 72px 52px 55px 68px 68px auto",color:C.mu,fontSize:"8px",letterSpacing:"1px",position:"sticky",top:0,background:C.bg2,zIndex:1}}>
+              {["SYMBOL","STRATEGY","ACTION","CONF","ENTRY","SL","REASON"].map(h=><span key={h}>{h}</span>)}
+            </div>
+            {signals.length===0&&<div style={{color:C.mu,textAlign:"center",padding:"40px 0",fontSize:"11px"}}>{engine.running?"Scanning…":"Start the engine"}</div>}
+            {signals.map((s,i)=>{
+              const meta=SMETA[s.strategy], isBuy=s.action==="BUY"||s.action==="HOLD_LONG";
+              return (
+                <div key={i} onClick={()=>{setSelSym(s.sym);setTab("positions");}}
+                  style={{...S.row(i%2===0),gridTemplateColumns:"72px 72px 52px 55px 68px 68px auto",fontSize:"10px",cursor:"pointer"}}>
+                  <span style={{color:C.tx,fontWeight:700}}>{s.sym}</span>
+                  <span style={S.bdg(meta?.color||C.mu)}>{s.strategy}</span>
+                  <span style={{color:isBuy?C.g:C.r,fontWeight:700,fontSize:"11px"}}>{s.action}</span>
+                  <div>
+                    <div style={{width:`${Math.round(s.strength*100)}%`,height:3,background:s.strength>.8?C.g:C.a,borderRadius:2}}/>
+                    <div style={{color:s.strength>.8?C.g:C.a,fontSize:"9px"}}>{(s.strength*100).toFixed(0)}%</div>
+                  </div>
+                  <span style={{fontSize:"9px"}}>{s.entry?fmt.inr(s.entry):"—"}</span>
+                  <span style={{fontSize:"9px",color:C.r}}>{s.sl?fmt.inr(s.sl):"—"}</span>
+                  <span style={{color:C.mu,fontSize:"9px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.reason}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Exec log */}
+        <div style={{...S.card,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={S.ct}>EXECUTION LOG</div>
+            <button onClick={()=>setExecLog([])} style={{...S.btn(C.mu),padding:"2px 7px",fontSize:"9px"}}>CLEAR</button>
+          </div>
+          <div style={{overflow:"auto",flex:1,fontFamily:"monospace",fontSize:"9px",lineHeight:1.7}}>
+            {execLog.length===0&&<div style={{color:C.mu,padding:"30px",textAlign:"center"}}>No executions yet</div>}
+            {execLog.map(e=>(
+              <div key={e.id} style={{padding:"3px 4px",borderBottom:`1px solid ${C.bg3}`,
+                color:e.type==="buy"?C.g:e.type==="profit"?C.b:e.type==="loss"?C.r:C.mu}}>
+                <span style={{color:C.mu,marginRight:5}}>{e.ts}</span>{e.msg}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════════
+  //  POSITIONS TAB
+  // ════════════════════════════════════════════════════════════════
+  const PositionsTab=()=>(
+    <div style={{flex:1,display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:"10px",overflow:"hidden"}}>
+      <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"hidden"}}>
+        {/* Price chart */}
+        <div style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <div style={{...S.ct,marginBottom:0}}>{selSym} — {selSt?fmt.inr(selSt.last):"—"}{selSt&&<span style={{color:selSt.changePct>=0?C.g:C.r,marginLeft:8}}>{fmt.pct(selSt.changePct)}</span>}</div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {NSE_STOCKS.slice(0,7).map(s=><button key={s.sym} onClick={()=>setSelSym(s.sym)} style={{...S.btn(selSym===s.sym?C.g:C.bd),padding:"2px 6px",fontSize:"9px"}}>{s.sym.slice(0,4)}</button>)}
+            </div>
+          </div>
+          {selSt&&<div style={{display:"flex",gap:12,marginBottom:5,fontSize:"9px",color:C.mu}}>
+            <span>RSI:<span style={{color:selSt.rsi<35?C.g:selSt.rsi>65?C.r:C.a}}> {selSt.rsi.toFixed(1)}</span></span>
+            <span>ATR:<span style={{color:C.b}}> {selSt.atr.toFixed(2)}</span></span>
+            <span>VWAP:<span style={{color:C.pu}}> {fmt.inr(selSt.vwap)}</span></span>
+            <span>Vol:<span style={{color:C.mu}}> {fmt.num(selSt.candles.at(-1)?.volume||0)}</span></span>
+          </div>}
+          <div style={{height:165}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartPts} margin={{top:4,right:0,left:0,bottom:0}}>
+                <defs>
+                  <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.g} stopOpacity={.12}/>
+                    <stop offset="95%" stopColor={C.g} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="t" tick={{fill:C.mu,fontSize:8}} tickLine={false} axisLine={false} interval={8}/>
+                <YAxis domain={["auto","auto"]} tick={{fill:C.mu,fontSize:8}} tickLine={false} axisLine={false} tickFormatter={v=>"₹"+v.toFixed(0)} width={54}/>
+                <Tooltip contentStyle={{background:C.bg2,border:`1px solid ${C.bd}`,fontSize:10,borderRadius:3}} formatter={v=>[fmt.inr(v),"Price"]}/>
+                {selPos&&<ReferenceLine y={selPos.sl}          stroke={C.r}  strokeDasharray="3 2" label={{value:"SL",fill:C.r,fontSize:8}}/>}
+                {selPos&&<ReferenceLine y={selPos.target}      stroke={C.b}  strokeDasharray="3 2" label={{value:"T", fill:C.b,fontSize:8}}/>}
+                {selPos&&<ReferenceLine y={selPos.entryPrice}  stroke={C.a}  strokeDasharray="3 2" label={{value:"E", fill:C.a,fontSize:8}}/>}
+                <Area type="monotone" dataKey="p" stroke={C.g} strokeWidth={1.5} fill="url(#pg)" dot={false}/>
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{height:38,marginTop:2}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartPts} margin={{top:0,right:0,left:0,bottom:0}}>
+                <Bar dataKey="v" fill={C.bg3}/><XAxis hide/><YAxis hide/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Trade history */}
+        <div style={{...S.card,flex:1,overflow:"hidden"}}>
+          <div style={S.ct}>COMPLETED TRADES ({tradeLog.length})</div>
+          <div style={{overflow:"auto"}}>
+            <div style={{...S.row(false),gridTemplateColumns:"68px 52px 42px 72px 72px 75px 70px 60px",color:C.mu,fontSize:"8px",letterSpacing:"1px"}}>
+              {["SYMBOL","SIDE","QTY","ENTRY","EXIT","P&L","REASON","TIME"].map(h=><span key={h}>{h}</span>)}
+            </div>
+            {tradeLog.length===0&&<div style={{color:C.mu,padding:"16px",textAlign:"center"}}>No completed trades</div>}
+            {tradeLog.map(t=>(
+              <div key={t.id} style={{...S.row(false),gridTemplateColumns:"68px 52px 42px 72px 72px 75px 70px 60px",fontSize:"10px"}}>
+                <span style={{color:C.tx,fontWeight:700}}>{t.sym}</span>
+                <span style={{color:t.side==="LONG"?C.g:C.r}}>{t.side}</span>
+                <span>{t.qty}</span>
+                <span>{fmt.inr(t.entryPrice)}</span>
+                <span>{fmt.inr(t.exitPrice)}</span>
+                <span style={{color:t.pnl>=0?C.g:C.r,fontWeight:700}}>{t.pnl>=0?"+":""}{fmt.inr(t.pnl)}</span>
+                <span style={S.bdg(t.reason==="SL_HIT"?C.r:t.reason==="TARGET"?C.g:C.a)}>{(t.reason||"").replace("EXIT_SIGNAL:","").replace("MANUAL_EXIT","MAN")}</span>
+                <span style={{color:C.mu,fontSize:"9px"}}>{t.ts}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"hidden"}}>
+        {/* Open positions */}
+        <div style={{...S.card,flex:1,overflow:"hidden"}}>
+          <div style={S.ct}>OPEN POSITIONS ({positions.length}/{engine.maxPositions})</div>
+          <div style={{overflow:"auto"}}>
+            {positions.length===0&&<div style={{color:C.mu,textAlign:"center",padding:"40px 6px",fontSize:"11px"}}>No open positions.<br/>Start the engine to begin auto-trading.</div>}
+            {positions.map(p=>{
+              const pnlPct=((p.ltp-p.entryPrice)/p.entryPrice)*100*(p.side==="LONG"?1:-1);
+              const slDist=Math.abs((p.ltp-p.sl)/p.ltp*100);
+              const slBar=Math.min(100,Math.max(0,100-slDist*10));
+              const meta=SMETA[p.strategy];
+              return (
+                <div key={p.id} style={{padding:"8px 4px",borderBottom:`1px solid ${C.bg3}`,cursor:"pointer"}} onClick={()=>setSelSym(p.sym)}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                    <span style={{color:C.tx,fontWeight:700}}>{p.sym}<span style={{color:C.mu,fontSize:"9px",marginLeft:5}}>{p.side}</span></span>
+                    <span style={{color:p.pnl>=0?C.g:C.r,fontWeight:700}}>{p.pnl>=0?"+":""}{fmt.inr(p.pnl)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:C.mu,fontSize:"10px",marginBottom:4}}>
+                    <span>{p.qty} × {fmt.inr(p.entryPrice)} → {fmt.inr(p.ltp)}</span>
+                    <span style={{color:p.pnl>=0?C.g:C.r}}>{fmt.pct(pnlPct)}</span>
+                  </div>
+                  {/* ATR Chandelier SL bar */}
+                  <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:3}}>
+                    <span style={{color:C.mu,fontSize:"8px",width:14}}>SL</span>
+                    <div style={{flex:1,background:C.bg3,borderRadius:2,height:3}}>
+                      <div style={{width:slBar+"%",background:slDist<1.5?C.r:slDist<3?C.a:C.g,height:"100%",borderRadius:2,transition:"width .6s"}}/>
+                    </div>
+                    <span style={{color:C.r,fontSize:"8px",minWidth:55,textAlign:"right"}}>{fmt.inr(p.sl)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:"8px",color:C.mu,marginBottom:4}}>
+                    <span>Target <span style={{color:C.b}}>{fmt.inr(p.target)}</span></span>
+                    <span style={S.bdg(meta?.color||C.mu)}>{p.strategy}</span>
+                  </div>
+                  <button onClick={ev=>{ev.stopPropagation();closePos({...p,ltp:market[p.sym]?.last||p.ltp},market[p.sym]?.last||p.ltp,"MANUAL_EXIT");}}
+                    style={{...S.btn(C.r),padding:"3px 8px",fontSize:"9px"}}>EXIT NOW</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Manual order */}
+        <div style={S.card}>
+          <div style={S.ct}>MANUAL ORDER</div>
+          <form onSubmit={e=>submitOrder(e,orderForm.side)}>
+            <div style={{marginBottom:8}}>
+              <div style={{color:C.mu,fontSize:"8px",marginBottom:3}}>SYMBOL</div>
+              <select value={orderForm.sym} onChange={e=>setOrderForm(p=>({...p,sym:e.target.value}))} style={S.sel}>
+                {NSE_STOCKS.map(s=><option key={s.sym}>{s.sym}</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:8}}>
+              <div style={{color:C.mu,fontSize:"8px",marginBottom:3}}>QUANTITY</div>
+              <input type="number" value={orderForm.qty} onChange={e=>setOrderForm(p=>({...p,qty:e.target.value}))} style={S.inp}/>
+            </div>
+            <div style={{background:C.bg3,borderRadius:3,padding:"6px 8px",marginBottom:8,fontSize:"9px",color:C.mu,lineHeight:1.8}}>
+              <div>LTP: <span style={{color:C.tx}}>{fmt.inr(market[orderForm.sym]?.last||0)}</span></div>
+              <div>Est. SL (ATR×{engine.atrMult}): <span style={{color:C.r}}>{fmt.inr((market[orderForm.sym]?.last||0)-engine.atrMult*(market[orderForm.sym]?.atr||0))}</span></div>
+              <div>Order value: <span style={{color:C.a}}>{fmt.inr((market[orderForm.sym]?.last||0)*parseInt(orderForm.qty||0))}</span></div>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button type="submit" onClick={()=>setOrderForm(p=>({...p,side:"BUY"}))} style={{flex:1,...S.btn(C.g,true),padding:"9px"}}>▲ BUY</button>
+              <button type="submit" onClick={()=>setOrderForm(p=>({...p,side:"SELL"}))} style={{flex:1,...S.btn(C.r,true),padding:"9px"}}>▼ SELL</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════════
+  //  SCANNER TAB
+  // ════════════════════════════════════════════════════════════════
+  const ScannerTab=()=>{
+    const rows=NSE_STOCKS.map(s=>{
+      const st=market[s.sym]; if(!st) return null;
+      const closes=st.candles.map(c=>c.close), bb=TA.bollinger(closes), st2=TA.supertrend(st.candles), mc=TA.macd(closes);
+      const pctB=Math.round(((st.last-bb.lower)/(bb.upper-bb.lower))*100);
+      const allS=Object.entries(SE).map(([id,fn])=>({id,...fn(st)}));
+      const topS=allS.filter(s=>s.action==="BUY"||s.action==="SELL").sort((a,b)=>b.strength-a.strength)[0];
+      const rr=topS&&topS.sl&&topS.target?Math.abs((topS.target-topS.entry)/(topS.entry-topS.sl)).toFixed(1):"—";
+      const inPos=!!positions.find(p=>p.sym===s.sym);
+      return {sym:s.sym,last:st.last,changePct:st.changePct,rsi:st.rsi,atr:st.atr,pctB,st2,mc,topS,rr,inPos};
+    }).filter(Boolean).sort((a,b)=>(b.topS?.strength||0)-(a.topS?.strength||0));
+    return (
+      <div style={{flex:1,overflow:"auto"}}>
+        <div style={S.card}>
+          <div style={S.ct}>MARKET SCANNER — ALL STRATEGIES × ALL STOCKS (real-time)</div>
+          <div style={{...S.row(false),gridTemplateColumns:"80px 68px 52px 48px 52px 48px 55px 52px 48px 75px 88px auto",color:C.mu,fontSize:"8px",letterSpacing:"1px",position:"sticky",top:0,background:C.bg2,zIndex:1}}>
+            {["SYMBOL","LTP","CHG%","RSI","ATR","BB%","ST","MACD","R:R","STRATEGY","ACTION","REASON"].map(h=><span key={h}>{h}</span>)}
+          </div>
+          {rows.map((r,i)=>{
+            const meta=r.topS?SMETA[r.topS.id]:null;
+            return (
+              <div key={r.sym} onClick={()=>{setSelSym(r.sym);setTab("positions");}}
+                style={{...S.row(i%2===0),gridTemplateColumns:"80px 68px 52px 48px 52px 48px 55px 52px 48px 75px 88px auto",fontSize:"10px",cursor:"pointer",background:r.inPos?C.g+"08":i%2===0?C.bg3+"66":"transparent"}}>
+                <span style={{color:C.tx,fontWeight:700}}>{r.sym}{r.inPos?" ●":""}</span>
+                <span style={{color:r.changePct>=0?C.g:C.r}}>{fmt.inr(r.last)}</span>
+                <span style={{color:r.changePct>=0?C.g:C.r}}>{fmt.pct(r.changePct)}</span>
+                <span style={{color:r.rsi<35?C.g:r.rsi>65?C.r:C.a}}>{r.rsi.toFixed(0)}</span>
+                <span style={{color:C.b}}>{r.atr.toFixed(1)}</span>
+                <span style={{color:r.pctB<20?C.g:r.pctB>80?C.r:C.mu}}>{r.pctB}%</span>
+                <span style={{color:r.st2.trend===1?C.g:C.r,fontSize:"9px"}}>{r.st2.trend===1?"↑BULL":"↓BEAR"}</span>
+                <span style={{color:r.mc.hist>0?C.g:C.r,fontSize:"9px"}}>{r.mc.hist.toFixed(1)}</span>
+                <span style={{color:r.rr!=="—"&&parseFloat(r.rr)>=2?C.g:C.mu}}>{r.rr!=="—"?r.rr+"x":"—"}</span>
+                {r.topS?<span style={S.bdg(meta?.color||C.mu)}>{r.topS.id}</span>:<span style={{color:C.mu}}>—</span>}
+                {r.topS?<span style={{color:r.topS.action==="BUY"?C.g:C.r,fontWeight:700}}>{(r.topS.strength*100).toFixed(0)}% {r.topS.action}</span>:<span style={{color:C.mu}}>no signal</span>}
+                <span style={{color:C.mu,fontSize:"9px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.topS?.reason||"—"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  //  AI TAB
+  // ════════════════════════════════════════════════════════════════
+  const AITab=()=>(
+    <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 260px",gap:"10px",overflow:"hidden"}}>
+      <div style={{...S.card,display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={S.ct}>VEGA AI — TRADING INTELLIGENCE</div>
+          <span style={S.bdg(C.pu)}>Claude Sonnet</span>
+        </div>
+        <div style={{flex:1,overflow:"auto",marginBottom:8}}>
+          {aiMsgs.map((m,i)=>(
+            <div key={i} style={{padding:"8px",borderRadius:3,marginBottom:6,background:m.role==="user"?"#0e1a2a":C.bg3,border:`1px solid ${m.role==="user"?"#1a3050":C.bd}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                <span style={{color:m.role==="user"?C.b:C.g,fontSize:"9px",fontWeight:700}}>{m.role==="user"?"YOU":"⚡ VEGA"}</span>
+                <span style={{color:C.mu,fontSize:"9px"}}>{m.ts}</span>
+              </div>
+              <div style={{color:"#aab0c0",whiteSpace:"pre-wrap",lineHeight:1.65,fontSize:"11px"}}>{m.content}</div>
+            </div>
+          ))}
+          {aiLoading&&<div style={{...S.card,color:C.mu,fontSize:"11px",animation:"pulse 1s infinite"}}>VEGA analyzing market data…</div>}
+          <div ref={aiEnd}/>
+        </div>
+        <div style={{display:"flex",gap:6,marginBottom:6}}>
+          <input value={aiInput} onChange={e=>setAiInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendAI(aiInput)} placeholder="Ask VEGA about strategy, positions, market conditions…" style={{...S.inp,flex:1}}/>
+          <button onClick={()=>sendAI(aiInput)} disabled={aiLoading} style={S.btn(C.g,true)}>SEND</button>
+        </div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          {["Best setups right now","Review my stop-losses","Market regime today","Strongest strategy today","Any positions to exit?"].map(q=>(
+            <button key={q} onClick={()=>sendAI(q)} style={{...S.btn(C.mu),padding:"3px 7px",fontSize:"9px"}}>{q}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"auto"}}>
+        <div style={S.card}>
+          <div style={S.ct}>MARKET PULSE</div>
+          {NSE_STOCKS.slice(0,8).map(s=>{const st=market[s.sym]; return st?(
+            <div key={s.sym} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"10px"}}>
+              <span style={{color:C.tx}}>{s.sym}</span>
+              <div style={{textAlign:"right"}}>
+                <div style={{color:st.changePct>=0?C.g:C.r}}>{fmt.pct(st.changePct)}</div>
+                <div style={{color:C.mu,fontSize:"8px"}}>RSI {st.rsi.toFixed(0)}</div>
+              </div>
+            </div>
+          ):null;})}
+        </div>
+        <div style={S.card}>
+          <div style={S.ct}>TOP SIGNALS</div>
+          {signals.slice(0,7).map((s,i)=>{const meta=SMETA[s.strategy]; return (
+            <div key={i} style={{padding:"4px 0",borderBottom:`1px solid ${C.bg3}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:"10px"}}>
+                <span style={{color:C.tx,fontWeight:700}}>{s.sym}</span>
+                <span style={{color:s.action==="BUY"?C.g:C.r,fontWeight:700}}>{s.action}</span>
+              </div>
+              <div style={{color:C.mu,fontSize:"8px"}}>{meta?.name} · {(s.strength*100).toFixed(0)}% conf</div>
+            </div>
+          );})}
+          {signals.length===0&&<div style={{color:C.mu,fontSize:"10px"}}>Start engine to generate signals</div>}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════════
+  //  ORDERS TAB
+  // ════════════════════════════════════════════════════════════════
+  const OrdersTab=()=>(
+    <div style={{flex:1,overflow:"auto"}}>
+      <div style={S.card}>
+        <div style={S.ct}>ORDER BOOK ({orders.length} orders)</div>
+        <div style={{...S.row(false),gridTemplateColumns:"130px 75px 52px 42px 72px 72px 58px 72px auto",color:C.mu,fontSize:"8px",letterSpacing:"1px"}}>
+          {["ORDER ID","SYMBOL","SIDE","QTY","PRICE","VALUE","STATUS","STRATEGY","TIME"].map(h=><span key={h}>{h}</span>)}
+        </div>
+        {orders.length===0&&<div style={{color:C.mu,padding:"20px",textAlign:"center"}}>No orders yet</div>}
+        {orders.map(o=>(
+          <div key={o.id} style={{...S.row(false),gridTemplateColumns:"130px 75px 52px 42px 72px 72px 58px 72px auto",fontSize:"10px"}}>
+            <span style={{color:C.mu,fontSize:"9px",fontFamily:"monospace"}}>{String(o.id).slice(-12)}</span>
+            <span style={{color:C.tx,fontWeight:700}}>{o.sym}</span>
+            <span style={{color:o.side==="BUY"?C.g:C.r}}>{o.side}</span>
+            <span>{o.qty}</span>
+            <span>{o.price}</span>
+            <span style={{color:C.a}}>{fmt.inr(parseFloat(o.price)*o.qty)}</span>
+            <span style={S.bdg(o.status==="FILLED"?C.g:C.a)}>{o.status}</span>
+            <span style={S.bdg(SMETA[o.strategy]?.color||C.mu)}>{o.strategy}</span>
+            <span style={{color:C.mu,fontSize:"9px"}}>{o.ts}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════════
+  //  SETTINGS TAB
+  // ════════════════════════════════════════════════════════════════
+  const SettingsTab=()=>(
+    <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"10px",overflow:"auto"}}>
+      <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+        <div style={S.card}>
+          <div style={S.ct}>GROWW API CREDENTIALS</div>
+          {[{l:"ACCESS TOKEN",k:"growwToken",ph:"eyJhbGci…",note:"groww.in/user/profile/trading-apis"},{l:"ANTHROPIC KEY",k:"anthropicKey",ph:"sk-ant-…",note:"console.anthropic.com"}].map(f=>(
+            <div key={f.k} style={{marginBottom:10}}>
+              <div style={{color:C.mu,fontSize:"8px",letterSpacing:"1px",marginBottom:3}}>{f.l}</div>
+              <input type="password" value={settings[f.k]} onChange={e=>setSettings(s=>({...s,[f.k]:e.target.value}))} placeholder={f.ph} style={S.inp}/>
+              <div style={{color:C.mu,fontSize:"8px",marginTop:2}}>{f.note}</div>
+            </div>
+          ))}
+          <div onClick={()=>setSettings(s=>({...s,paperMode:!s.paperMode}))}
+            style={{border:`1px solid ${settings.paperMode?C.a:C.r}`,borderRadius:3,padding:"10px",textAlign:"center",cursor:"pointer",background:settings.paperMode?C.a+"11":C.r+"11"}}>
+            <div style={{color:settings.paperMode?C.a:C.r,fontWeight:700}}>{settings.paperMode?"📝 PAPER TRADING MODE":"⚡ LIVE TRADING — REAL MONEY"}</div>
+            <div style={{color:C.mu,fontSize:"9px",marginTop:2}}>{settings.paperMode?"Orders are simulated, no real execution":"WARNING: Real orders sent to Groww"}</div>
+          </div>
+        </div>
+        <div style={S.card}>
+          <div style={S.ct}>GROWW API ENDPOINTS</div>
+          {[["POST","/v1/order/create","Place order"],["GET","/v1/order/detail/{id}","Order status"],["POST","/v1/order/cancel","Cancel order"],["POST","/v1/smart-order/create","OCO/GTT orders"],["GET","/v1/live-data/ltp","Live price"],["GET","/v1/live-data/ohlc","OHLC data"],["GET","/v1/historical-data","Candle history"],["GET","/v1/portfolio/positions","Positions"],["GET","/v1/portfolio/holdings","Holdings"],["GET","/v1/user/funds","Fund balance"]].map(([m,ep,d])=>(
+            <div key={ep} style={{display:"flex",gap:5,padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"9px",alignItems:"center"}}>
+              <span style={S.bdg(m==="GET"?C.b:C.a)}>{m}</span>
+              <span style={{color:C.tx,fontFamily:"monospace",flex:1}}>{ep}</span>
+              <span style={{color:C.mu}}>{d}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+        <div style={S.card}>
+          <div style={S.ct}>ATR CHANDELIER STOP ENGINE</div>
+          <div style={{fontSize:"10px",color:C.mu,lineHeight:1.9}}>
+            <div style={{color:"#aaa",marginBottom:5}}>Algorithm: <span style={{color:C.g}}>Chandelier Exit v2 (Ratchet)</span></div>
+            <div>• ATR period: <span style={{color:C.a}}>14 candles</span></div>
+            <div>• Active mult: <span style={{color:C.a}}>{engine.atrMult}×</span></div>
+            <div>• LONG SL = HighestHigh(14) − ATR × mult</div>
+            <div>• SHORT SL = LowestLow(14) + ATR × mult</div>
+            <div>• Stop <span style={{color:C.g}}>ratchets up only</span> — never retreats</div>
+            <div>• Widens in volatile markets automatically</div>
+            <div>• Checked every tick (1.5s)</div>
+            <div style={{marginTop:6,padding:"6px 8px",background:C.bg3,borderRadius:3,color:"#555",fontSize:"9px"}}>
+              Minimum R:R = {(engine.atrMult*1.5/engine.atrMult).toFixed(1)}×. Min confidence = {(engine.minStrength*100).toFixed(0)}%. Position size = Risk ₹ ÷ SL distance per share.
+            </div>
+          </div>
+        </div>
+        <div style={S.card}>
+          <div style={S.ct}>CLOUDFLARE DEPLOYMENT</div>
+          <div style={{background:C.bg3,borderRadius:3,padding:"10px",fontFamily:"monospace",fontSize:"9px",lineHeight:1.9,color:C.mu}}>
+            <div style={{color:C.b}}># 1. Init CF project</div>
+            <div>npm create cloudflare@latest vega</div>
+            <div style={{color:C.b}}># 2. Deploy React frontend</div>
+            <div>npm run build</div>
+            <div>wrangler pages deploy dist</div>
+            <div style={{color:C.b}}># 3. Deploy trading worker</div>
+            <div>wrangler deploy worker/engine.js</div>
+            <div style={{color:C.b}}># 4. Set secrets</div>
+            <div>wrangler secret put GROWW_TOKEN</div>
+            <div>wrangler secret put ANTHROPIC_KEY</div>
+            <div style={{color:C.b}}># 5. Cron (IST 9:15–15:30)</div>
+            <div>crons = ["*/1 3-10 * * 1-5"]</div>
+          </div>
+          <div style={{marginTop:6,color:C.mu,fontSize:"9px",lineHeight:1.7}}>
+            KV → position state · D1 → trade history · Durable Objects → real-time sync · Cron Triggers → market-hour automation
+          </div>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.ct}>STRATEGY DETAILS</div>
+        {Object.entries(SMETA).map(([id,meta])=>(
+          <div key={id} style={{marginBottom:10,padding:"8px",background:engine.strategies[id]?meta.color+"08":C.bg3,border:`1px solid ${engine.strategies[id]?meta.color+"30":C.bd}`,borderRadius:3}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+              <div style={{color:meta.color,fontWeight:700}}>{meta.name}</div>
+              <span style={S.bdg(engine.strategies[id]?C.g:C.mu)}>{engine.strategies[id]?"ACTIVE":"OFF"}</span>
+            </div>
+            <div style={{color:C.mu,fontSize:"9px",lineHeight:1.7}}>
+              {id==="momentum"   &&<><div>Entry: EMA9 crosses EMA21 upward</div><div>Filter: RSI between 45–72</div><div>Exit: EMA9 crosses below EMA21</div></>}
+              {id==="supertrend" &&<><div>Entry: SuperTrend flips bullish (trend -1→1)</div><div>Config: Period 10, Multiplier 3</div><div>Exit: ST flips bearish</div></>}
+              {id==="mean_rev"   &&<><div>Entry: Price touches lower BB + RSI &lt;35</div><div>Target: Bollinger Band midline (SMA20)</div><div>Exit: Price at upper BB or RSI &gt;65</div></>}
+              {id==="breakout"   &&<><div>Entry: 20-bar high break + vol &gt;1.5× avg</div><div>Stop: Below breakout level − ATR</div><div>Exit: Target = 2.5× ATR from entry</div></>}
+              {id==="macd"       &&<><div>Entry: MACD crosses signal below zero line</div><div>Config: 12/26/9 standard parameters</div><div>Exit: MACD crosses signal above zero</div></>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════════
+  //  RENDER
+  // ════════════════════════════════════════════════════════════════
+  const TABS=[{id:"engine",l:"AUTO ENGINE"},{id:"positions",l:"POSITIONS"},{id:"scanner",l:"SCANNER"},{id:"ai",l:"AI AGENT"},{id:"orders",l:"ORDERS"},{id:"settings",l:"SETTINGS"}];
+
+  return (
+    <div style={S.app}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:#090b0f}::-webkit-scrollbar-thumb{background:#1a1f2e;border-radius:2px}
+        input:focus,select:focus{border-color:#00e87a!important}
+        button:hover{opacity:.82}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+      `}</style>
+
+      {/* TOPBAR */}
+      <div style={S.topbar}>
+        <div style={S.logo}>⚡ VEGA</div>
+        {indices.map(idx=>(
+          <div key={idx.name} style={{padding:"3px 10px",borderRadius:3,background:idx.changePct>=0?C.g+"10":C.r+"10",border:`1px solid ${idx.changePct>=0?C.g+"30":C.r+"30"}`,marginRight:7}}>
+            <span style={{color:C.mu,fontSize:"9px",marginRight:5}}>{idx.name}</span>
+            <span style={{color:idx.changePct>=0?C.g:C.r,fontWeight:700}}>{idx.current.toLocaleString("en-IN",{maximumFractionDigits:1})}</span>
+            <span style={{color:idx.changePct>=0?C.g:C.r,fontSize:"9px",marginLeft:5}}>{fmt.pct(idx.changePct)}</span>
+          </div>
+        ))}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{color:C.mu,fontSize:"10px"}}>{new Date().toLocaleTimeString("en-IN")}</span>
+          <span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span>
+          <span style={S.bdg(engine.running?C.g:C.mu)}>{engine.running?"TRADING":"IDLE"}</span>
+          <span style={{color:C.mu,fontSize:"9px"}}>{positions.length}pos · {signals.length}sig · {portfolio.trades}trades</span>
+          <div style={{width:7,height:7,borderRadius:"50%",background:C.g,boxShadow:`0 0 6px ${C.g}`}}/>
+        </div>
+      </div>
+
+      {/* NAV */}
+      <div style={S.nav}>
+        {TABS.map(t=><button key={t.id} style={S.nb(tab===t.id)} onClick={()=>setTab(t.id)}>{t.l}</button>)}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",padding:"0 12px"}}>
+          <span style={{color:C.g,fontSize:"9px"}}>● NSE LIVE</span>
+        </div>
+      </div>
+
+      {/* BODY */}
+      <div style={S.body}>
+        {tab==="engine"    && <EngineTab/>}
+        {tab==="positions" && <PositionsTab/>}
+        {tab==="scanner"   && <ScannerTab/>}
+        {tab==="ai"        && <AITab/>}
+        {tab==="orders"    && <OrdersTab/>}
+        {tab==="settings"  && <SettingsTab/>}
+      </div>
+    </div>
+  );
+}

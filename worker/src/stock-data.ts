@@ -293,3 +293,26 @@ export async function getMarketMovers(): Promise<{
     mostActive: [...valid].sort((a, b) => b.volume - a.volume).slice(0, 5),
   };
 }
+
+// Get stock news via Yahoo Finance
+export async function getStockNews(symbol: string): Promise<StockNews[]> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(symbol)}&quotesCount=0&newsCount=10`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; StockAI/1.0)" },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as any;
+    return (data.news || []).map((n: any) => ({
+      title: n.title || "",
+      summary: n.publisher || "",
+      source: n.publisher || "Yahoo Finance",
+      url: n.link || "",
+      publishedAt: n.providerPublishTime
+        ? new Date(n.providerPublishTime * 1000).toISOString()
+        : new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+}
