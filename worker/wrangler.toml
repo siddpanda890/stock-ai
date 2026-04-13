@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 VERTEX_PROJECT_ID = "gen-lang-client-0915982142"
 VERTEX_LOCATION = "us-east5"
-CORS_ORIGIN = "https://dash.vegatrade.in,https://stock-ai-dashboard.pages.dev"
+CORS_ORIGIN = "https://dash.vegatrade.in,https://vegatrade.in,https://stock-ai-dashboard.pages.dev,https://vegatrade-landing.pages.dev"
 JWT_SECRET = "stock-ai-jwt-secret-v1-change-in-prod"
 
 [[kv_namespaces]]
