@@ -211,7 +211,7 @@ export default function VegaApp({ user, onLogout }) {
       const saved = JSON.parse(localStorage.getItem("vega-portfolio") || "null");
       if (saved) return saved;
     } catch {}
-    return {capital:500000,cash:500000,invested:0,dayPnL:0,peakCapital:500000,trades:0,wins:0};
+    return {capital:100000,cash:100000,invested:0,dayPnL:0,peakCapital:100000,trades:0,wins:0};
   });
   const [engine,   setEngine]   = useState(() => {
     try {
@@ -350,10 +350,13 @@ export default function VegaApp({ user, onLogout }) {
         });
         setIndices(indicesData);
 
-        // Load portfolio
+        // Load portfolio from backend and sync peakCapital
         try {
           const port = await api.getPortfolio();
-          setPortfolio(prev => ({ ...prev, ...port }));
+          setPortfolio(prev => {
+            const totalVal = port.totalValue || port.cash || prev.cash;
+            return { ...prev, ...port, capital: totalVal, peakCapital: Math.max(prev.peakCapital, totalVal) };
+          });
         } catch (e) {
           console.warn("Failed to load portfolio:", e);
         }
@@ -592,7 +595,8 @@ User asks: ${msg}`;
   const selSt=market[selSym];
   const chartPts=selSt?.candles.slice(-50).map(c=>({t:c.time.slice(0,5),p:+c.close.toFixed(2),v:c.volume}))||[];
   const selPos=positions.find(p=>p.sym===selSym);
-  const drawdown=portfolio.peakCapital>0?((portfolio.peakCapital-(portfolio.cash+portfolio.invested+portfolio.dayPnL))/portfolio.peakCapital)*100:0;
+  const currentValue=portfolio.cash+portfolio.invested+portfolio.dayPnL;
+  const drawdown=portfolio.peakCapital>0&&portfolio.trades>0?Math.max(0,((portfolio.peakCapital-currentValue)/portfolio.peakCapital)*100):0;
   const winRate=portfolio.trades>0?(portfolio.wins/portfolio.trades*100).toFixed(0):"—";
 
   // ── colours (theme-driven) ────────────────────────────────────
