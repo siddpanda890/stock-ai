@@ -22,6 +22,9 @@ export interface Portfolio {
   holdings: Holding[];
   trades: Trade[];
   cash: number;
+  realizedPnl: number;  // running total of all realized P&L
+  totalTradeCount: number;
+  winCount: number;
 }
 
 export interface PortfolioSummary {
@@ -42,8 +45,15 @@ export interface PortfolioSummary {
 // Get portfolio from KV
 export async function getPortfolio(kv: KVNamespace, userId: string): Promise<Portfolio> {
   const data = await kv.get(`portfolio:${userId}`);
-  if (!data) return { holdings: [], trades: [], cash: 100000 };
-  return JSON.parse(data);
+  if (!data) return { holdings: [], trades: [], cash: 100000, realizedPnl: 0, totalTradeCount: 0, winCount: 0 };
+  const parsed = JSON.parse(data);
+  // Backfill for existing portfolios missing new fields
+  return {
+    ...parsed,
+    realizedPnl: parsed.realizedPnl ?? 0,
+    totalTradeCount: parsed.totalTradeCount ?? parsed.trades?.length ?? 0,
+    winCount: parsed.winCount ?? 0,
+  };
 }
 
 // Save portfolio to KV
@@ -102,6 +112,9 @@ export async function executeBuy(
   portfolio.cash -= total;
   portfolio.trades.unshift(trade); // newest first
 
+  // Keep trades list manageable (last 500)
+  if (portfolio.trades.length > 500) portfolio.trades = portfolio.trades.slice(0, 500);
+
   await savePortfolio(kv, userId, portfolio);
   return { success: true, trade, portfolio };
 }
@@ -155,7 +168,13 @@ export async function executeSell(
   }
 
   portfolio.cash += total;
+  portfolio.realizedPnl += realizedPnl;
+  portfolio.totalTradeCount += 1;
+  if (realizedPnl > 0) portfolio.winCount += 1;
   portfolio.trades.unshift(trade);
+
+  // Keep trades list manageable (last 500)
+  if (portfolio.trades.length > 500) portfolio.trades = portfolio.trades.slice(0, 500);
 
   await savePortfolio(kv, userId, portfolio);
   return { success: true, trade, portfolio, realizedPnl };

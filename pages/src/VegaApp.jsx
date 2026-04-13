@@ -211,7 +211,7 @@ export default function VegaApp({ user, onLogout }) {
       const saved = JSON.parse(localStorage.getItem("vega-portfolio") || "null");
       if (saved) return saved;
     } catch {}
-    return {capital:100000,cash:100000,invested:0,dayPnL:0,peakCapital:100000,trades:0,wins:0};
+    return {capital:100000,cash:100000,peakCapital:100000,trades:0,wins:0};
   });
   const [engine,   setEngine]   = useState(() => {
     try {
@@ -350,12 +350,20 @@ export default function VegaApp({ user, onLogout }) {
         });
         setIndices(indicesData);
 
-        // Load portfolio from backend and sync peakCapital
+        // Load portfolio from backend — carefully map fields to avoid schema mismatch
         try {
           const port = await api.getPortfolio();
           setPortfolio(prev => {
-            const totalVal = port.totalValue || port.cash || prev.cash;
-            return { ...prev, ...port, capital: totalVal, peakCapital: Math.max(prev.peakCapital, totalVal) };
+            // Backend cash is the authoritative source of truth
+            const backendCash = typeof port.cash === "number" ? port.cash : prev.cash;
+            const totalVal = backendCash + (port.totalValue - backendCash || 0);
+            return {
+              ...prev,
+              cash: backendCash,
+              capital: totalVal,
+              peakCapital: Math.max(prev.peakCapital, totalVal),
+              // DO NOT spread ...port — it has array 'trades' which conflicts with our numeric 'trades' counter
+            };
           });
         } catch (e) {
           console.warn("Failed to load portfolio:", e);
@@ -427,10 +435,15 @@ export default function VegaApp({ user, onLogout }) {
     }));
   },[market]);
 
+  // Derive P&L from positions — computed values, not stored in portfolio state
+  const dayPnL = positions.reduce((s,p)=>s+p.pnl,0);
+  const invested = positions.reduce((s,p)=>s+p.entryPrice*p.qty,0);
+  const currentValue = portfolio.cash + invested + dayPnL;
+
   useEffect(()=>{
-    const dayPnL=positions.reduce((s,p)=>s+p.pnl,0), invested=positions.reduce((s,p)=>s+p.entryPrice*p.qty,0);
-    setPortfolio(prev=>({...prev,dayPnL,invested,peakCapital:Math.max(prev.peakCapital,prev.cash+invested+dayPnL)}));
-  },[positions]);
+    // Only update peakCapital (a stored value), not the derived values
+    setPortfolio(prev=>({...prev,peakCapital:Math.max(prev.peakCapital,prev.cash+invested+dayPnL)}));
+  },[positions, dayPnL, invested]);
 
   // ── execution helpers ─────────────────────────────────────────
   const addLog=useCallback((msg,type="info")=>{
@@ -441,7 +454,9 @@ export default function VegaApp({ user, onLogout }) {
     const pnl=(exitPrice-p.entryPrice)*p.qty*(p.side==="LONG"?1:-1);
     setPositions(prev=>prev.filter(x=>x.id!==p.id));
     setTradeLog(prev=>[{id:Date.now(),sym:p.sym,side:p.side,qty:p.qty,entryPrice:p.entryPrice,exitPrice,pnl,reason,ts:fmt.t()},...prev.slice(0,299)]);
-    setPortfolio(prev=>({...prev,cash:prev.cash+exitPrice*p.qty+(pnl<0?pnl:0),trades:prev.trades+1,wins:prev.wins+(pnl>0?1:0)}));
+    // Proper accounting: on sell we receive exitPrice*qty back into cash (cost was deducted on entry)
+    // P&L is tracked separately — do NOT add pnl to cash again
+    setPortfolio(prev=>({...prev,cash:prev.cash+exitPrice*p.qty,trades:prev.trades+1,wins:prev.wins+(pnl>0?1:0)}));
     const icon=reason==="SL_HIT"?"🛑":reason==="TARGET"?"🎯":"📤";
     addLog(`${icon} EXIT ${p.sym} @ ${fmt.inr(exitPrice)} | P&L:${pnl>=0?"+":""}${fmt.inr(pnl)} [${reason}]`,pnl>=0?"profit":"loss");
 
@@ -490,7 +505,10 @@ export default function VegaApp({ user, onLogout }) {
     toClose.forEach(({p,ltp,reason})=>{if(!closedIds.has(p.id)){closedIds.add(p.id);closePos({...p,ltp},ltp,reason);}});
 
     // 2. Daily loss halt (only check if trades have been made)
-    const currentVal=port.cash+port.invested+port.dayPnL;
+    // Derive from positions (dayPnL and invested are no longer in portfolio state)
+    const posDayPnL=pos.reduce((s,p)=>s+p.pnl,0);
+    const posInvested=pos.reduce((s,p)=>s+p.entryPrice*p.qty,0);
+    const currentVal=port.cash+posInvested+posDayPnL;
     const dd=port.peakCapital>0&&port.trades>0?Math.max(0,((port.peakCapital-currentVal)/port.peakCapital)*100):0;
     if(dd>=eng.dailyLossLimit){setEngine(e=>({...e,running:false}));addLog(`⛔ Daily loss limit ${eng.dailyLossLimit}% hit (DD: ${dd.toFixed(1)}%). Engine halted.`,"loss");return;}
 
@@ -542,7 +560,7 @@ export default function VegaApp({ user, onLogout }) {
     setAiMsgs(prev=>[...prev,{role:"user",content:msg,ts:fmt.t()}]);
     setAiInput(""); setAiLoading(true);
     const port=portRef.current, pos=posRef.current;
-    const contextMsg = `[VEGA Context] Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(port.dayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
+    const contextMsg = `[VEGA Context] Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(posDayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
 Positions: ${pos.map(p=>`${p.sym} ${p.side} ${p.qty}@₹${p.entryPrice.toFixed(0)} SL:₹${p.sl?.toFixed(0)} P&L:${fmt.inr(p.pnl)}`).join(" | ")||"none"}
 Signals: ${signals.slice(0,5).map(s=>`${s.sym} ${s.action}(${(s.strength*100).toFixed(0)}%) via ${s.strategy}`).join(" | ")||"none"}
 User asks: ${msg}`;
@@ -596,7 +614,7 @@ User asks: ${msg}`;
   const selSt=market[selSym];
   const chartPts=selSt?.candles.slice(-50).map(c=>({t:c.time.slice(0,5),p:+c.close.toFixed(2),v:c.volume}))||[];
   const selPos=positions.find(p=>p.sym===selSym);
-  const currentValue=portfolio.cash+portfolio.invested+portfolio.dayPnL;
+  // currentValue is already computed above as a derived value
   const drawdown=portfolio.peakCapital>0&&portfolio.trades>0?Math.max(0,((portfolio.peakCapital-currentValue)/portfolio.peakCapital)*100):0;
   const winRate=portfolio.trades>0?(portfolio.wins/portfolio.trades*100).toFixed(0):"—";
 
@@ -627,8 +645,8 @@ User asks: ${msg}`;
       {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"8px"}}>
         {[
-          {l:"PORTFOLIO VALUE",v:fmt.inr(portfolio.cash+portfolio.invested+portfolio.dayPnL),c:C.tx},
-          {l:"DAY P&L",v:(portfolio.dayPnL>=0?"+":"")+fmt.inr(portfolio.dayPnL),c:portfolio.dayPnL>=0?C.g:C.r},
+          {l:"PORTFOLIO VALUE",v:fmt.inr(currentValue),c:C.tx},
+          {l:"DAY P&L",v:(dayPnL>=0?"+":"")+fmt.inr(dayPnL),c:dayPnL>=0?C.g:C.r},
           {l:"FREE CASH",v:fmt.inr(portfolio.cash),c:C.a},
           {l:"WIN RATE",v:winRate+(portfolio.trades?"%":""),c:C.b},
           {l:"DRAWDOWN",v:"-"+drawdown.toFixed(2)+"%",c:drawdown>2?C.r:C.mu},
