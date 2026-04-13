@@ -1,6 +1,6 @@
 // Vega AI Stock Analyst - Deep analysis & buy/sell signals engine
 
-import { callClaude, type ModelKey } from "./vertex-ai";
+import { callAI, type ModelKey, type AIConfig } from "./vertex-ai";
 import {
   type StockQuote,
   type HistoricalDataPoint,
@@ -31,6 +31,7 @@ interface Env {
   VERTEX_LOCATION: string;
   VERTEX_SERVICE_ACCOUNT_JSON: string;
   ANTHROPIC_API_KEY: string;
+  OPENAI_API_KEY?: string;
 }
 
 const SYSTEM_PROMPT = `You are an elite AI stock analyst with deep expertise in technical analysis, fundamental analysis, and quantitative trading. You work for a hedge fund and provide precise, actionable analysis.
@@ -110,15 +111,18 @@ ${dataContext}
 
 Respond ONLY with the JSON object, no markdown or extra text.`;
 
-  const config = {
-    projectId: env.VERTEX_PROJECT_ID,
-    location: env.VERTEX_LOCATION,
-    serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
+  const aiConfig: AIConfig = {
+    vertex: {
+      projectId: env.VERTEX_PROJECT_ID,
+      location: env.VERTEX_LOCATION,
+      serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
+    },
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    openaiApiKey: env.OPENAI_API_KEY,
   };
 
-  const response = await callClaude(
-    config,
-    env.ANTHROPIC_API_KEY,
+  const response = await callAI(
+    aiConfig,
     [{ role: "user", content: prompt }],
     SYSTEM_PROMPT,
     model,
@@ -152,19 +156,22 @@ export async function chat(
   stockContext?: string,
   model: ModelKey = "sonnet-4.6"
 ): Promise<string> {
-  const config = {
-    projectId: env.VERTEX_PROJECT_ID,
-    location: env.VERTEX_LOCATION,
-    serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
+  const aiConfig: AIConfig = {
+    vertex: {
+      projectId: env.VERTEX_PROJECT_ID,
+      location: env.VERTEX_LOCATION,
+      serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
+    },
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    openaiApiKey: env.OPENAI_API_KEY,
   };
 
   const systemWithContext = stockContext
     ? `${SYSTEM_PROMPT}\n\nCurrent market context:\n${stockContext}`
     : SYSTEM_PROMPT;
 
-  const response = await callClaude(
-    config,
-    env.ANTHROPIC_API_KEY,
+  const response = await callAI(
+    aiConfig,
     messages,
     systemWithContext,
     model,

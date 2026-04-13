@@ -10,7 +10,7 @@ import {
   getStockNews,
 } from "./stock-data";
 import { analyzeStock, chat, type ChatMessage } from "./ai-analyst";
-import { type ModelKey, MODELS } from "./vertex-ai";
+import { type ModelKey, MODELS, callAI, type AIConfig } from "./vertex-ai";
 import {
   registerUser,
   loginUser,
@@ -78,6 +78,7 @@ type Bindings = {
   VERTEX_SERVICE_ACCOUNT_JSON: string;
   ANTHROPIC_API_KEY: string;
   GOOGLE_API_KEY: string;
+  OPENAI_API_KEY: string;
   CORS_ORIGIN: string;
   JWT_SECRET: string;
   STOCK_AI_KV: KVNamespace;
@@ -102,12 +103,39 @@ app.use("*", cors({
 app.get("/", (c) =>
   c.json({
     name: "Stock AI API",
-    version: "2.0.0",
+    version: "2.1.0",
     status: "online",
     models: Object.keys(MODELS),
-    features: ["auth", "portfolio", "watchlist", "alerts", "ai-analysis", "chat", "news", "trade-logging", "analytics", "learning-loop", "risk-manager", "news-sentiment", "regime-detection", "backtest", "persistence"],
+    features: ["auth", "portfolio", "watchlist", "alerts", "ai-analysis", "chat", "news", "trade-logging", "analytics", "learning-loop", "risk-manager", "news-sentiment", "regime-detection", "backtest", "persistence", "multi-model"],
   })
 );
+
+// Models list — tells frontend which models are available
+app.get("/api/models", (c) => {
+  const models = Object.keys(MODELS).map((key) => {
+    const k = key as ModelKey;
+    let provider: string, tier: string, description: string;
+    if (key.startsWith("opus") || key.startsWith("sonnet") || key.startsWith("haiku")) {
+      provider = "Anthropic (Claude)";
+      tier = key.startsWith("opus") ? "ultra" : key.startsWith("sonnet") ? "pro" : "lite";
+      description = key.startsWith("opus") ? "Most powerful reasoning — complex analysis"
+        : key.startsWith("sonnet") ? "Best balance of speed & intelligence"
+        : "Fastest & cheapest — quick lookups";
+    } else if (key.startsWith("gemini")) {
+      provider = "Google (Gemini)";
+      tier = key.includes("flash") ? "lite" : "pro";
+      description = key.includes("flash") ? "Ultra-fast Gemini — quick scans"
+        : "1M context, strong math/reasoning — deep analysis";
+    } else {
+      provider = "OpenAI (GPT)";
+      tier = key.includes("mini") ? "lite" : "pro";
+      description = key.includes("mini") ? "Fast & affordable GPT — quick checks"
+        : "Frontier GPT model — comprehensive analysis";
+    }
+    return { key: k, provider, tier, description, available: true };
+  });
+  return c.json({ success: true, models });
+});
 
 // ═══════════════════════════════════════════════════════
 // AUTH ENDPOINTS (public)
@@ -250,7 +278,7 @@ app.post("/api/analyze", async (c) => {
     ]);
     const indicators = calculateIndicators(historicalData);
     const analysis = await analyzeStock(
-      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY },
+      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: c.env.OPENAI_API_KEY },
       quote, historicalData, indicators, model
     );
 
@@ -322,7 +350,7 @@ app.post("/api/chat", async (c) => {
     }
 
     const response = await chat(
-      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY },
+      { VERTEX_PROJECT_ID: c.env.VERTEX_PROJECT_ID, VERTEX_LOCATION: c.env.VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON: c.env.VERTEX_SERVICE_ACCOUNT_JSON, ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: c.env.OPENAI_API_KEY },
       body.messages, stockContext, model
     );
     return c.json({ success: true, data: { response, model } });
