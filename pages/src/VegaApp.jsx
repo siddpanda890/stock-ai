@@ -197,12 +197,22 @@ export default function VegaApp({ user, onLogout }) {
   const [marketLoading, setMarketLoading] = useState(true);
   const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
   const [indices,  setIndices]  = useState([]);
-  const [positions,setPositions]= useState([]);
+  const [positions,setPositions]= useState(() => {
+    try { return JSON.parse(localStorage.getItem("vega-positions") || "[]"); } catch { return []; }
+  });
   const [orders,   setOrders]   = useState([]);
-  const [tradeLog, setTradeLog] = useState([]);
+  const [tradeLog, setTradeLog] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("vega-tradeLog") || "[]"); } catch { return []; }
+  });
   const [signals,  setSignals]  = useState([]);
   const [execLog,  setExecLog]  = useState([]);
-  const [portfolio,setPortfolio]= useState({capital:500000,cash:500000,invested:0,dayPnL:0,peakCapital:500000,trades:0,wins:0});
+  const [portfolio,setPortfolio]= useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("vega-portfolio") || "null");
+      if (saved) return saved;
+    } catch {}
+    return {capital:500000,cash:500000,invested:0,dayPnL:0,peakCapital:500000,trades:0,wins:0};
+  });
   const [engine,   setEngine]   = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("vega-engine") || "null");
@@ -213,8 +223,11 @@ export default function VegaApp({ user, onLogout }) {
       riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
     };
   });
-  // ── persist engine state ──────────────────────────────────
+  // ── persist state across refresh ──────────────────────────
   useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify(engine)); }, [engine]);
+  useEffect(() => { localStorage.setItem("vega-positions", JSON.stringify(positions)); }, [positions]);
+  useEffect(() => { localStorage.setItem("vega-portfolio", JSON.stringify(portfolio)); }, [portfolio]);
+  useEffect(() => { localStorage.setItem("vega-tradeLog", JSON.stringify(tradeLog)); }, [tradeLog]);
 
   const [tab,      setTab]      = useState("engine");
   const [selSym,   setSelSym]   = useState(DEFAULT_SYMBOLS[0]);
@@ -502,16 +515,22 @@ export default function VegaApp({ user, onLogout }) {
     setSignals(liveSigs.filter(s=>s.action!=="NONE"&&s.action!=="HOLD_LONG").sort((a,b)=>b.strength-a.strength).slice(0,25));
   },[closePos,openPos,addLog]);
 
-  // ── engine timer ──────────────────────────────────────────────
+  // ── engine timer (waits for market data before scanning) ──────
   const timerRef=useRef(null);
+  const engineStartedRef=useRef(false);
   useEffect(()=>{
     clearInterval(timerRef.current);
-    if(!engine.running) return;
-    addLog("⚡ Auto-trade engine STARTED","info");
+    if(!engine.running) { engineStartedRef.current=false; return; }
+    // Don't start scanning until market data is loaded
+    if(marketLoading || Object.keys(market).length===0) return;
+    if(!engineStartedRef.current) {
+      addLog("⚡ Auto-trade engine STARTED","info");
+      engineStartedRef.current=true;
+    }
     runScan();
     timerRef.current=setInterval(runScan,engine.scanInterval*1000);
     return ()=>clearInterval(timerRef.current);
-  },[engine.running,engine.scanInterval,runScan]);
+  },[engine.running,engine.scanInterval,runScan,marketLoading,Object.keys(market).length]);
 
   // ── AI ────────────────────────────────────────────────────────
   async function sendAI(msg){
@@ -954,6 +973,37 @@ User asks: ${msg}`;
     setAnalysisLoading(false);
   }
 
+  // ── autonomous AI agent: auto-analyze strong signals ──────────
+  const autoAnalyzedRef = useRef(new Set());
+  useEffect(() => {
+    if (!engine.running || analysisLoading || signals.length === 0) return;
+    // Find strong signals (>85%) not yet auto-analyzed this session
+    const strong = signals.find(s => s.strength >= 0.85 && !autoAnalyzedRef.current.has(s.sym + s.action));
+    if (strong) {
+      autoAnalyzedRef.current.add(strong.sym + strong.action);
+      addLog(`🤖 Auto-analyzing ${strong.sym} (${(strong.strength*100).toFixed(0)}% ${strong.action} via ${strong.strategy})`, "info");
+      runAnalysis(strong.sym);
+    }
+  }, [signals, engine.running, analysisLoading]);
+
+  // ── news sentiment agent: fetch news for selected symbol ──────
+  const [newsData, setNewsData] = useState([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const lastNewsFetch = useRef("");
+  async function fetchNews(sym) {
+    const target = sym || selSym;
+    if (newsLoading || lastNewsFetch.current === target) return;
+    lastNewsFetch.current = target;
+    setNewsLoading(true);
+    try {
+      const news = await api.getNews(target);
+      setNewsData(news?.slice(0, 10) || []);
+    } catch { setNewsData([]); }
+    setNewsLoading(false);
+  }
+  // Auto-fetch news when selected symbol changes
+  useEffect(() => { if (tab === "ai") fetchNews(); }, [selSym, tab]);
+
   // ════════════════════════════════════════════════════════════════
   //  AI TAB
   // ════════════════════════════════════════════════════════════════
@@ -1080,6 +1130,20 @@ User asks: ${msg}`;
             })}
           </div>
         )}
+
+        {/* News Sentiment */}
+        <div style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={S.ct}>NEWS — {selSym}</div>
+            <button onClick={()=>{lastNewsFetch.current="";fetchNews();}} style={{...S.btn(C.b),padding:"2px 6px",fontSize:"8px"}}>{newsLoading?"…":"REFRESH"}</button>
+          </div>
+          {newsData.length>0 ? newsData.slice(0,5).map((n,i)=>(
+            <div key={i} style={{padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"9px"}}>
+              <a href={n.link||n.url||"#"} target="_blank" rel="noopener" style={{color:C.b,textDecoration:"none",lineHeight:1.4,display:"block"}}>{(n.title||"News").slice(0,60)}{(n.title||"").length>60?"…":""}</a>
+              <div style={{color:C.mu,fontSize:"8px",marginTop:1}}>{n.publisher||n.source||""} · {n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleDateString("en-IN") : ""}</div>
+            </div>
+          )) : <div style={{color:C.mu,fontSize:"10px",textAlign:"center",padding:"8px 0"}}>{newsLoading?"Loading news…":"No news available"}</div>}
+        </div>
       </div>
     </div>
   );};
