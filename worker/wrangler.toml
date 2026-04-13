@@ -1,0 +1,14 @@
+name = "stock-ai-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+VERTEX_PROJECT_ID = "gen-lang-client-0915982142"
+VERTEX_LOCATION = "us-east5"
+CORS_ORIGIN = "*"
+
+# Secrets (set via wrangler secret put):
+# VERTEX_SERVICE_ACCOUNT_JSON
+# ANTHROPIC_API_KEY
+# GOOGLE_API_KEY
