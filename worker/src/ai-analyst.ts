@@ -1,4 +1,4 @@
-// AI Stock Analyst - Uses Claude via Vertex AI for deep analysis & buy/sell signals
+// Vega AI Stock Analyst - Deep analysis & buy/sell signals engine
 
 import { callClaude, type ModelKey } from "./vertex-ai";
 import {

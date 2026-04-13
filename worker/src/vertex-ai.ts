@@ -1,5 +1,5 @@
-// Vertex AI Claude Integration - Uses Google Service Account for auth
-// Supports Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 via Vertex AI
+// Vega AI Engine - Multi-model AI pipeline
+// Supports Vega Ultra, Pro, and Lite model tiers
 
 interface VertexAIConfig {
   projectId: string;
@@ -95,7 +95,7 @@ async function getAccessToken(serviceAccountJson: string): Promise<string> {
   return tokenData.access_token;
 }
 
-// Available Claude models on Vertex AI
+// Available Vega AI models
 export const MODELS = {
   "opus-4.6": "claude-opus-4-6@20250514",
   "sonnet-4.6": "claude-sonnet-4-6@20250514",
@@ -104,7 +104,7 @@ export const MODELS = {
 
 export type ModelKey = keyof typeof MODELS;
 
-// Call Claude via Vertex AI
+// Call Vega AI model
 export async function callVertexAI(
   config: VertexAIConfig,
   messages: Message[],
@@ -141,7 +141,7 @@ export async function callVertexAI(
   return (await response.json()) as VertexResponse;
 }
 
-// Convenience: Call with direct Anthropic API as fallback
+// Convenience: Call with fallback API provider
 export async function callClaude(
   config: VertexAIConfig,
   anthropicApiKey: string,
@@ -153,9 +153,9 @@ export async function callClaude(
   try {
     return await callVertexAI(config, messages, systemPrompt, model, maxTokens);
   } catch (vertexError) {
-    console.warn("Vertex AI failed, falling back to Anthropic API:", vertexError);
+    console.warn("Primary AI provider failed, falling back:", vertexError);
 
-    // Fallback to direct Anthropic API
+    // Fallback to secondary API provider
     const anthropicModel =
       model === "opus-4.6"
         ? "claude-opus-4-6"

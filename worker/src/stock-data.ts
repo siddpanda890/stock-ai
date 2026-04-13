@@ -1,6 +1,5 @@
-// Stock Data Service - Multi-source for accuracy & speed
-// Primary: Yahoo Finance (real-time, free, reliable)
-// Enrichment: Finnhub (news, sentiment)
+// Vega Market Data Service - Multi-source for accuracy & speed
+// Real-time quotes, historical data, news & sentiment
 
 export interface StockQuote {
   symbol: string;
@@ -58,7 +57,7 @@ export interface TechnicalIndicators {
   vwap: number;
 }
 
-// Yahoo Finance API (via query endpoints)
+// Market data provider API
 export async function getQuote(symbol: string): Promise<StockQuote> {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1m&includePrePost=false`;
 
@@ -68,7 +67,7 @@ export async function getQuote(symbol: string): Promise<StockQuote> {
     },
   });
 
-  if (!res.ok) throw new Error(`Yahoo Finance error: ${res.status}`);
+  if (!res.ok) throw new Error(`Market data error: ${res.status}`);
 
   const data = (await res.json()) as any;
   const result = data.chart.result[0];
@@ -294,7 +293,7 @@ export async function getMarketMovers(): Promise<{
   };
 }
 
-// Get stock news via Yahoo Finance
+// Get stock news via market data feed
 export async function getStockNews(symbol: string): Promise<StockNews[]> {
   try {
     const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(symbol)}&quotesCount=0&newsCount=10`;
@@ -306,7 +305,7 @@ export async function getStockNews(symbol: string): Promise<StockNews[]> {
     return (data.news || []).map((n: any) => ({
       title: n.title || "",
       summary: n.publisher || "",
-      source: n.publisher || "Yahoo Finance",
+      source: n.publisher || "Market News",
       url: n.link || "",
       publishedAt: n.providerPublishTime
         ? new Date(n.providerPublishTime * 1000).toISOString()
