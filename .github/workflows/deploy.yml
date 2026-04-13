@@ -107,5 +107,35 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler
 
+      - name: Create Pages project if not exists
+        run: |
+          # Check if project exists
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/vegatrade-landing")
+          if [ "$STATUS" != "200" ]; then
+            echo "Creating vegatrade-landing project..."
+            curl -s -X POST \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects" \
+              -d '{"name":"vegatrade-landing","production_branch":"main"}'
+            echo ""
+            echo "Project created."
+          else
+            echo "Project vegatrade-landing already exists."
+          fi
+
       - name: Deploy landing page to Cloudflare Pages
         run: wrangler pages deploy landing/ --project-name=vegatrade-landing --commit-dirty=true
+
+      - name: Add vegatrade.in custom domain
+        continue-on-error: true
+        run: |
+          # Add custom domain (idempotent — will 409 if already exists)
+          curl -s -X POST \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/vegatrade-landing/domains" \
+            -d '{"name":"vegatrade.in"}' | jq .
+          echo "Custom domain vegatrade.in configured."
