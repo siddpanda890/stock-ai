@@ -1021,9 +1021,9 @@ User asks: ${msg}`;
           <div style={S.ct}>VEGA AI — TRADING INTELLIGENCE</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             <select value={aiModel} onChange={e=>setAiModel(e.target.value)} style={{...S.sel,width:"auto",padding:"3px 8px",fontSize:"9px"}}>
-              <option value="sonnet-4.6">Claude Sonnet 4.6</option>
-              <option value="opus-4.6">Claude Opus 4.6</option>
-              <option value="haiku-4.5">Claude Haiku 4.5</option>
+              <option value="sonnet-4.6">Vega Pro</option>
+              <option value="opus-4.6">Vega Ultra</option>
+              <option value="haiku-4.5">Vega Lite</option>
             </select>
             <span style={S.bdg(C.pu)}>{aiModel.split("-")[0].toUpperCase()}</span>
           </div>
@@ -1189,7 +1189,7 @@ User asks: ${msg}`;
       <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
         <div style={S.card}>
           <div style={S.ct}>GROWW API CREDENTIALS</div>
-          {[{l:"ACCESS TOKEN",k:"growwToken",ph:"eyJhbGci…",note:"groww.in/user/profile/trading-apis"},{l:"ANTHROPIC KEY",k:"anthropicKey",ph:"sk-ant-…",note:"console.anthropic.com"}].map(f=>(
+          {[{l:"ACCESS TOKEN",k:"growwToken",ph:"eyJhbGci…",note:"groww.in/user/profile/trading-apis"},{l:"AI API KEY",k:"anthropicKey",ph:"sk-…",note:"Vega AI credentials"}].map(f=>(
             <div key={f.k} style={{marginBottom:10}}>
               <div style={{color:C.mu,fontSize:"8px",letterSpacing:"1px",marginBottom:3}}>{f.l}</div>
               <input type="password" value={settings[f.k]} onChange={e=>setSettings(s=>({...s,[f.k]:e.target.value}))} placeholder={f.ph} style={S.inp}/>
@@ -1232,18 +1232,18 @@ User asks: ${msg}`;
           </div>
         </div>
         <div style={S.card}>
-          <div style={S.ct}>CLOUDFLARE DEPLOYMENT</div>
+          <div style={S.ct}>DEPLOYMENT</div>
           <div style={{background:C.bg3,borderRadius:3,padding:"10px",fontFamily:"monospace",fontSize:"9px",lineHeight:1.9,color:C.mu}}>
-            <div style={{color:C.b}}># 1. Init CF project</div>
-            <div>npm create cloudflare@latest vega</div>
+            <div style={{color:C.b}}># 1. Init project</div>
+            <div>npx create-vega@latest</div>
             <div style={{color:C.b}}># 2. Deploy React frontend</div>
             <div>npm run build</div>
-            <div>wrangler pages deploy dist</div>
+            <div>vega pages deploy dist</div>
             <div style={{color:C.b}}># 3. Deploy trading worker</div>
-            <div>wrangler deploy worker/engine.js</div>
+            <div>vega deploy worker/engine.js</div>
             <div style={{color:C.b}}># 4. Set secrets</div>
-            <div>wrangler secret put GROWW_TOKEN</div>
-            <div>wrangler secret put ANTHROPIC_KEY</div>
+            <div>vega secret put GROWW_TOKEN</div>
+            <div>vega secret put AI_API_KEY</div>
             <div style={{color:C.b}}># 5. Cron (IST 9:15–15:30)</div>
             <div>crons = ["*/1 3-10 * * 1-5"]</div>
           </div>
@@ -1335,7 +1335,7 @@ User asks: ${msg}`;
         {marketLoading ? (
           <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
             <div style={{color:C.g,fontSize:"28px",fontWeight:700,fontFamily:FONT_UI,letterSpacing:"6px",animation:"pulse 1.5s infinite"}}>⚡ VEGA</div>
-            <div style={{color:C.mu,fontSize:"13px",fontFamily:FONT_UI}}>Loading real-time market data from Yahoo Finance…</div>
+            <div style={{color:C.mu,fontSize:"13px",fontFamily:FONT_UI}}>Loading real-time market data…</div>
             <div style={{color:C.mu,fontSize:"11px",fontFamily:FONT_MONO}}>Fetching {watchlistSymbols.length} stocks + {INDEX_SYMBOLS.length} indices</div>
           </div>
         ) : (

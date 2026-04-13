@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VegaTrade — AI-Powered Stock Trading Intelligence</title>
 <meta name="description" content="VegaTrade uses advanced AI models to analyze Indian stock markets in real-time. Autonomous trading engine, deep analysis, and intelligent signal generation for NSE stocks.">
-<meta name="keywords" content="AI trading, stock market, NSE, NIFTY, algorithmic trading, Claude AI, stock analysis, India">
+<meta name="keywords" content="AI trading, stock market, NSE, NIFTY, algorithmic trading, Vega AI, stock analysis, India">
 <meta property="og:title" content="VegaTrade — AI-Powered Stock Trading Intelligence">
-<meta property="og:description" content="Autonomous AI trading engine for Indian markets. Real-time analysis, 5 strategy engines, and Claude-powered deep analysis.">
+<meta property="og:description" content="Autonomous AI trading engine for Indian markets. Real-time analysis, 5 strategy engines, and Vega AI-powered deep analysis.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://vegatrade.in">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,6 +24,18 @@
   --glow-pu:0 0 40px rgba(167,139,250,.15);
   --mono:'IBM Plex Mono',monospace;
   --ui:'Inter',system-ui,sans-serif;
+  --nav-bg:rgba(5,7,9,.8);--card-border:rgba(255,255,255,.04);--card-border-h:rgba(255,255,255,.08);
+  --grain-opacity:.4;--hero-glow-g:rgba(0,232,122,.06);--hero-glow-b:rgba(91,158,247,.03);
+}
+[data-theme="light"]{
+  --bg:#f5f7fa;--bg2:#ffffff;--bg3:#eef1f6;--bg4:#e2e6ed;
+  --tx:#3a4055;--txh:#1a1d2b;--mu:#6b7280;
+  --g:#00b862;--r:#dc2626;--b:#2563eb;--pu:#7c3aed;--a:#d97706;
+  --glow-g:0 0 40px rgba(0,184,98,.1);
+  --glow-b:0 0 40px rgba(37,99,235,.1);
+  --glow-pu:0 0 40px rgba(124,58,237,.1);
+  --nav-bg:rgba(245,247,250,.9);--card-border:rgba(0,0,0,.08);--card-border-h:rgba(0,0,0,.14);
+  --grain-opacity:0;--hero-glow-g:rgba(0,184,98,.08);--hero-glow-b:rgba(37,99,235,.05);
 }
 html{scroll-behavior:smooth;font-size:16px}
 body{background:var(--bg);color:var(--tx);font-family:var(--ui);line-height:1.6;overflow-x:hidden}
@@ -33,11 +45,11 @@ a:hover{color:var(--pu)}
 /* ── Grain overlay ── */
 body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
   background:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
-  opacity:.4}
+  opacity:var(--grain-opacity)}
 
 /* ── Nav ── */
 nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 40px;height:64px;display:flex;align-items:center;justify-content:space-between;
-  background:rgba(5,7,9,.8);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.04)}
+  background:var(--nav-bg);backdrop-filter:blur(20px);border-bottom:1px solid var(--card-border)}
 .nav-logo{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:700;font-size:18px;color:var(--txh);letter-spacing:1px}
 .nav-logo svg{width:28px;height:28px}
 .nav-links{display:flex;gap:32px;align-items:center}
@@ -49,7 +61,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 40px;height:64px;d
 /* ── Hero ── */
 .hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:120px 24px 80px;position:relative}
 .hero::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:800px;height:800px;
-  background:radial-gradient(circle,rgba(0,232,122,.06) 0%,rgba(91,158,247,.03) 40%,transparent 70%);pointer-events:none}
+  background:radial-gradient(circle,var(--hero-glow-g) 0%,var(--hero-glow-b) 40%,transparent 70%);pointer-events:none}
 .hero-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:20px;border:1px solid rgba(0,232,122,.2);
   background:rgba(0,232,122,.05);font-family:var(--mono);font-size:11px;color:var(--g);letter-spacing:1px;margin-bottom:32px}
 .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--g);animation:pulse 2s infinite}
@@ -64,7 +76,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 40px;height:64px;d
 .btn-secondary:hover{border-color:var(--b);color:var(--b);box-shadow:var(--glow-b)}
 
 /* ── Ticker strip ── */
-.ticker-strip{width:100%;overflow:hidden;padding:20px 0;border-top:1px solid rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.04);background:var(--bg2);margin-top:40px}
+.ticker-strip{width:100%;overflow:hidden;padding:20px 0;border-top:1px solid var(--card-border);border-bottom:1px solid var(--card-border);background:var(--bg2);margin-top:40px}
 .ticker-inner{display:flex;gap:48px;animation:scroll 30s linear infinite;width:max-content}
 @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 .ticker-item{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:13px;white-space:nowrap}
@@ -80,9 +92,10 @@ section{padding:100px 24px}
 
 /* ── Features grid ── */
 .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-.feature-card{padding:32px;border-radius:12px;border:1px solid rgba(255,255,255,.04);background:var(--bg2);transition:all .3s;position:relative;overflow:hidden}
-.feature-card:hover{border-color:rgba(255,255,255,.08);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.feature-card{padding:32px;border-radius:12px;border:1px solid var(--card-border);background:var(--bg2);transition:all .3s;position:relative;overflow:hidden}
+.feature-card:hover{border-color:var(--card-border-h);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.15)}
 .feature-card::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--g),transparent);opacity:0;transition:opacity .3s}
+body{transition:background .3s,color .3s}
 .feature-card:hover::before{opacity:1}
 .feature-icon{width:48px;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;font-size:22px}
 .feature-card h3{font-size:17px;font-weight:700;color:var(--txh);margin-bottom:8px;letter-spacing:-.3px}
@@ -105,16 +118,16 @@ section{padding:100px 24px}
 
 /* ── Strategies ── */
 .strategies{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
-.strat-card{padding:24px;border-radius:10px;border:1px solid rgba(255,255,255,.04);background:var(--bg2);text-align:center;transition:all .3s}
-.strat-card:hover{border-color:rgba(255,255,255,.08);transform:translateY(-2px)}
+.strat-card{padding:24px;border-radius:10px;border:1px solid var(--card-border);background:var(--bg2);text-align:center;transition:all .3s}
+.strat-card:hover{border-color:var(--card-border-h);transform:translateY(-2px)}
 .strat-dot{width:10px;height:10px;border-radius:50%;margin:0 auto 12px}
 .strat-card h4{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--txh);margin-bottom:6px;letter-spacing:.5px}
 .strat-card p{font-size:11px;color:var(--mu);line-height:1.5}
 
 /* ── Tech stack ── */
 .tech-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.tech-card{padding:24px;border-radius:10px;border:1px solid rgba(255,255,255,.04);background:var(--bg2);display:flex;align-items:flex-start;gap:16px;transition:all .3s}
-.tech-card:hover{border-color:rgba(255,255,255,.08)}
+.tech-card{padding:24px;border-radius:10px;border:1px solid var(--card-border);background:var(--bg2);display:flex;align-items:flex-start;gap:16px;transition:all .3s}
+.tech-card:hover{border-color:var(--card-border-h)}
 .tech-icon{font-size:24px;flex-shrink:0;width:40px;text-align:center}
 .tech-card h4{font-size:13px;font-weight:700;color:var(--txh);margin-bottom:4px}
 .tech-card p{font-size:11px;color:var(--mu);line-height:1.5}
@@ -128,7 +141,7 @@ section{padding:100px 24px}
 .cta-section p{font-size:16px;color:var(--mu);margin-bottom:40px;max-width:480px;margin-left:auto;margin-right:auto}
 
 /* ── Footer ── */
-footer{border-top:1px solid rgba(255,255,255,.04);padding:40px 24px;text-align:center}
+footer{border-top:1px solid var(--card-border);padding:40px 24px;text-align:center}
 footer .container{display:flex;justify-content:space-between;align-items:center}
 .footer-left{font-family:var(--mono);font-size:12px;color:var(--mu)}
 .footer-links{display:flex;gap:24px}
@@ -157,6 +170,14 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
   .strategies{grid-template-columns:1fr}
 }
 
+/* ── Theme toggle ── */
+.theme-toggle{background:none;border:1px solid var(--card-border);border-radius:8px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;color:var(--mu);font-size:18px;padding:0;flex-shrink:0}
+.theme-toggle:hover{border-color:var(--card-border-h);color:var(--txh)}
+[data-theme="light"] .theme-toggle .icon-moon{display:none}
+[data-theme="light"] .theme-toggle .icon-sun{display:inline}
+:root .theme-toggle .icon-sun{display:none}
+:root .theme-toggle .icon-moon{display:inline}
+
 /* ── Animations ── */
 .fade-up{opacity:0;transform:translateY(30px);transition:opacity .6s ease,transform .6s ease}
 .fade-up.visible{opacity:1;transform:translateY(0)}
@@ -175,6 +196,7 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
     <a href="#how-it-works">How It Works</a>
     <a href="#strategies">Strategies</a>
     <a href="#tech">Technology</a>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme"><span class="icon-moon">&#9790;</span><span class="icon-sun">&#9728;&#65039;</span></button>
     <a href="https://dash.vegatrade.in" class="nav-cta">Open Dashboard</a>
   </div>
 </nav>
@@ -183,7 +205,7 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
 <section class="hero">
   <div class="hero-badge"><span class="dot"></span> AI-POWERED TRADING ENGINE</div>
   <h1>Trade Smarter with <span>AI Intelligence</span></h1>
-  <p>VegaTrade combines real-time market data, 5 algorithmic strategy engines, and Claude AI deep analysis to identify high-conviction trading opportunities on NSE.</p>
+  <p>VegaTrade combines real-time market data, 5 algorithmic strategy engines, and Vega AI deep analysis to identify high-conviction trading opportunities on NSE.</p>
   <div class="hero-actions">
     <a href="https://dash.vegatrade.in" class="btn-primary">Launch Dashboard <span>&rarr;</span></a>
     <a href="#features" class="btn-secondary">Explore Features</a>
@@ -207,13 +229,13 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
       </div>
       <div class="feature-card fade-up">
         <div class="feature-icon fi-purple">&#129504;</div>
-        <h3>Claude AI Deep Analysis</h3>
-        <p>One-click deep analysis powered by Claude Sonnet 4.6, Opus 4.6, and Haiku 4.5. Get signal, confidence, target price, stop loss, catalysts, and risk assessment for any stock.</p>
+        <h3>Vega AI Deep Analysis</h3>
+        <p>One-click deep analysis powered by Vega AI's advanced models. Get signal, confidence, target price, stop loss, catalysts, and risk assessment for any stock.</p>
       </div>
       <div class="feature-card fade-up">
         <div class="feature-icon fi-blue">&#128200;</div>
         <h3>Real-Time Market Data</h3>
-        <p>Live quotes from Yahoo Finance for all NSE stocks and indices. 30-second refresh cycle with 3-month historical candle data for comprehensive technical analysis.</p>
+        <p>Live quotes for all NSE stocks and indices. 30-second refresh cycle with 3-month historical candle data for comprehensive technical analysis.</p>
       </div>
       <div class="feature-card fade-up">
         <div class="feature-icon fi-amber">&#128202;</div>
@@ -305,20 +327,20 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
   <div class="container">
     <div class="section-label fade-up">Technology</div>
     <h2 class="section-title fade-up">Built on the edge</h2>
-    <p class="section-desc fade-up">VegaTrade runs entirely on Cloudflare's global edge network for sub-100ms response times worldwide.</p>
+    <p class="section-desc fade-up">VegaTrade runs entirely on edge infrastructure for sub-100ms response times worldwide.</p>
     <div class="tech-grid">
       <div class="tech-card fade-up">
         <div class="tech-icon">&#9889;</div>
         <div>
-          <h4>Cloudflare Workers</h4>
-          <p>Backend API runs on 300+ edge locations. Hono framework for routing, KV storage for state.</p>
+          <h4>Edge Workers</h4>
+          <p>Backend API runs on 300+ global edge locations. Hono framework for routing, KV storage for state.</p>
         </div>
       </div>
       <div class="tech-card fade-up">
         <div class="tech-icon">&#129302;</div>
         <div>
-          <h4>Claude AI (Vertex)</h4>
-          <p>Anthropic's Claude via Google Vertex AI. Opus 4.6, Sonnet 4.6, Haiku 4.5 for analysis and chat.</p>
+          <h4>Vega AI Engine</h4>
+          <p>Advanced multi-model AI pipeline. Multiple model tiers for deep analysis, signals, and conversational insights.</p>
         </div>
       </div>
       <div class="tech-card fade-up">
@@ -331,7 +353,7 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
       <div class="tech-card fade-up">
         <div class="tech-icon">&#128200;</div>
         <div>
-          <h4>Yahoo Finance API</h4>
+          <h4>Market Data Feed</h4>
           <p>Live stock quotes, historical candles, search, and news. Real-time data for NSE and BSE markets.</p>
         </div>
       </div>
@@ -342,7 +364,7 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
 <!-- CTA -->
 <section class="cta-section">
   <h2 class="fade-up">Ready to trade with <span>AI intelligence</span>?</h2>
-  <p class="fade-up">Open the VegaTrade dashboard and start analyzing Indian markets with the power of Claude AI and 5 autonomous strategy engines.</p>
+  <p class="fade-up">Open the VegaTrade dashboard and start analyzing Indian markets with the power of Vega AI and 5 autonomous strategy engines.</p>
   <a href="https://dash.vegatrade.in" class="btn-primary fade-up" style="font-size:17px;padding:16px 40px">Launch VegaTrade Dashboard <span>&rarr;</span></a>
 </section>
 
@@ -350,7 +372,7 @@ footer .container{display:flex;justify-content:space-between;align-items:center}
 <footer>
   <div class="container" style="flex-direction:column;gap:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-      <div class="footer-left">&copy; 2026 VegaTrade. Built with Cloudflare + Claude AI.</div>
+      <div class="footer-left">&copy; 2026 VegaTrade. Powered by Vega AI.</div>
       <div class="footer-links">
         <a href="https://dash.vegatrade.in">Dashboard</a>
         <a href="#features">Features</a>
@@ -400,6 +422,21 @@ const obs = new IntersectionObserver((entries) => {
   entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("visible"); obs.unobserve(e.target); } });
 }, { threshold: 0.1, rootMargin: "0px 0px -40px 0px" });
 document.querySelectorAll(".fade-up").forEach(el => obs.observe(el));
+
+// Theme toggle
+const themeBtn = document.getElementById("themeToggle");
+const savedTheme = (() => { try { return localStorage.getItem("vega-theme"); } catch { return null; } })();
+if (savedTheme === "light") document.documentElement.setAttribute("data-theme", "light");
+themeBtn.addEventListener("click", () => {
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+  if (isLight) {
+    document.documentElement.removeAttribute("data-theme");
+    try { localStorage.setItem("vega-theme", "dark"); } catch {}
+  } else {
+    document.documentElement.setAttribute("data-theme", "light");
+    try { localStorage.setItem("vega-theme", "light"); } catch {}
+  }
+});
 </script>
 </body>
 </html>
