@@ -933,15 +933,45 @@ User asks: ${msg}`;
     );
   };
 
+  // ── AI analysis ─────────────────────────────────────────────
+  const [aiModel, setAiModel] = useState("sonnet-4.6");
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisHistory, setAnalysisHistory] = useState([]);
+
+  async function runAnalysis(sym) {
+    setAnalysisLoading(true);
+    try {
+      const result = await api.analyze(sym || selSym, aiModel);
+      setAnalysis(result);
+      setAnalysisHistory(prev => [{...result, ts: fmt.t()}, ...prev.slice(0, 19)]);
+      // Also add to chat as context
+      const a = result.analysis;
+      setAiMsgs(prev => [...prev, {role:"assistant", content:`📊 AI Analysis — ${result.quote.symbol}\n\nSignal: ${a.signal} (${a.confidence}% confidence)\nTarget: ₹${a.targetPrice?.toFixed(2)} | SL: ₹${a.stopLoss?.toFixed(2)}\nTime: ${a.timeHorizon}\n\n${a.summary}\n\n🔬 Technical: ${a.technicalAnalysis?.slice(0,200)}…\n⚠️ Risk: ${a.riskAssessment?.slice(0,150)}…\n\n📌 Catalysts: ${(a.catalysts||[]).join(", ")}\n\n⚖️ ${result.disclaimer}`, ts:fmt.t()}]);
+    } catch (e) {
+      setAiMsgs(prev => [...prev, {role:"assistant", content:`⚠️ Analysis failed: ${e.message}`, ts:fmt.t()}]);
+    }
+    setAnalysisLoading(false);
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  AI TAB
   // ════════════════════════════════════════════════════════════════
-  const AITab=()=>(
-    <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 260px",gap:"10px",overflow:"hidden"}}>
+  const AITab=()=>{
+    const sigColor = !analysis ? C.mu : analysis.analysis?.signal?.includes("BUY") ? C.g : analysis.analysis?.signal?.includes("SELL") ? C.r : C.a;
+    return (
+    <div style={{flex:1,display:"grid",gridTemplateColumns:"1fr 300px",gap:"10px",overflow:"hidden"}}>
       <div style={{...S.card,display:"flex",flexDirection:"column"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
           <div style={S.ct}>VEGA AI — TRADING INTELLIGENCE</div>
-          <span style={S.bdg(C.pu)}>Claude Sonnet</span>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <select value={aiModel} onChange={e=>setAiModel(e.target.value)} style={{...S.sel,width:"auto",padding:"3px 8px",fontSize:"9px"}}>
+              <option value="sonnet-4.6">Claude Sonnet 4.6</option>
+              <option value="opus-4.6">Claude Opus 4.6</option>
+              <option value="haiku-4.5">Claude Haiku 4.5</option>
+            </select>
+            <span style={S.bdg(C.pu)}>{aiModel.split("-")[0].toUpperCase()}</span>
+          </div>
         </div>
         <div style={{flex:1,overflow:"auto",marginBottom:8}}>
           {aiMsgs.map((m,i)=>(
@@ -953,25 +983,62 @@ User asks: ${msg}`;
               <div style={{color:C.tx,whiteSpace:"pre-wrap",lineHeight:1.65,fontSize:"11px"}}>{m.content}</div>
             </div>
           ))}
-          {aiLoading&&<div style={{...S.card,color:C.mu,fontSize:"11px",animation:"pulse 1s infinite"}}>VEGA analyzing market data…</div>}
+          {(aiLoading||analysisLoading)&&<div style={{...S.card,color:C.mu,fontSize:"11px",animation:"pulse 1s infinite"}}>⚡ VEGA {analysisLoading?"running deep analysis":"thinking"}…</div>}
           <div ref={aiEnd}/>
         </div>
         <div style={{display:"flex",gap:6,marginBottom:6}}>
           <input value={aiInput} onChange={e=>setAiInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendAI(aiInput)} placeholder="Ask VEGA about strategy, positions, market conditions…" style={{...S.inp,flex:1}}/>
-          <button onClick={()=>sendAI(aiInput)} disabled={aiLoading} style={S.btn(C.g,true)}>SEND</button>
+          <button onClick={()=>sendAI(aiInput)} disabled={aiLoading||analysisLoading} style={S.btn(C.g,true)}>SEND</button>
         </div>
         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-          {["Best setups right now","Review my stop-losses","Market regime today","Strongest strategy today","Any positions to exit?"].map(q=>(
+          {["Best setups right now","Review my stop-losses","Market regime today","Strongest strategy today","Any positions to exit?","Portfolio risk assessment"].map(q=>(
             <button key={q} onClick={()=>sendAI(q)} style={{...S.btn(C.mu),padding:"3px 7px",fontSize:"9px"}}>{q}</button>
           ))}
         </div>
       </div>
+
       <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"auto"}}>
+        {/* AI Deep Analysis */}
+        <div style={S.card}>
+          <div style={S.ct}>AI DEEP ANALYSIS</div>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <select value={selSym} onChange={e=>setSelSym(e.target.value)} style={{...S.sel,flex:1,padding:"5px 8px",fontSize:"10px"}}>
+              {Object.keys(market).map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+            <button onClick={()=>runAnalysis()} disabled={analysisLoading} style={{...S.btn(C.pu,true),padding:"5px 10px",fontSize:"10px",whiteSpace:"nowrap"}}>
+              {analysisLoading?"Analyzing…":"🔬 ANALYZE"}
+            </button>
+          </div>
+          {analysis?.analysis && (
+            <div style={{fontSize:"10px",lineHeight:1.8}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <span style={{color:sigColor,fontWeight:700,fontSize:"14px"}}>{analysis.analysis.signal}</span>
+                <span style={{color:C.a,fontWeight:700}}>{analysis.analysis.confidence}%</span>
+              </div>
+              <div style={{padding:"6px 8px",background:C.bg3,borderRadius:3,marginBottom:6}}>
+                <div style={{color:C.tx,fontWeight:600,marginBottom:3}}>{analysis.analysis.summary}</div>
+                <div style={{color:C.mu,fontSize:"9px"}}>Target: <span style={{color:C.g}}>₹{analysis.analysis.targetPrice?.toFixed(2)}</span> | SL: <span style={{color:C.r}}>₹{analysis.analysis.stopLoss?.toFixed(2)}</span></div>
+                <div style={{color:C.mu,fontSize:"9px"}}>Horizon: <span style={{color:C.b}}>{analysis.analysis.timeHorizon}</span> | Model: <span style={{color:C.pu}}>{analysis.analysis.model}</span></div>
+              </div>
+              {analysis.analysis.catalysts?.length > 0 && (
+                <div style={{marginBottom:6}}>
+                  <div style={{color:C.mu,fontSize:"9px",marginBottom:2}}>CATALYSTS:</div>
+                  {analysis.analysis.catalysts.map((c,i)=>(
+                    <div key={i} style={{color:C.tx,fontSize:"9px",paddingLeft:8}}>• {c}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {!analysis && <div style={{color:C.mu,fontSize:"10px",textAlign:"center",padding:"12px 0"}}>Select a stock and click Analyze for AI-powered deep analysis</div>}
+        </div>
+
+        {/* Market Pulse */}
         <div style={S.card}>
           <div style={S.ct}>MARKET PULSE</div>
           {Object.values(market).slice(0,8).map(s=>(
-            <div key={s.sym} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"10px"}}>
-              <span style={{color:C.tx}}>{s.sym}</span>
+            <div key={s.sym} onClick={()=>setSelSym(s.sym)} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"10px",cursor:"pointer"}}>
+              <span style={{color:C.tx}}>{(s.name||s.sym).slice(0,12)}</span>
               <div style={{textAlign:"right"}}>
                 <div style={{color:s.changePct>=0?C.g:C.r}}>{fmt.pct(s.changePct)}</div>
                 <div style={{color:C.mu,fontSize:"8px"}}>RSI {s.rsi.toFixed(0)}</div>
@@ -979,22 +1046,43 @@ User asks: ${msg}`;
             </div>
           ))}
         </div>
+
+        {/* Top Signals */}
         <div style={S.card}>
           <div style={S.ct}>TOP SIGNALS</div>
-          {signals.slice(0,7).map((s,i)=>{const meta=SMETA[s.strategy]; return (
-            <div key={i} style={{padding:"4px 0",borderBottom:`1px solid ${C.bg3}`}}>
+          {signals.slice(0,5).map((s,i)=>{const meta=SMETA[s.strategy]; return (
+            <div key={i} style={{padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,cursor:"pointer"}} onClick={()=>{setSelSym(s.sym);runAnalysis(s.sym);}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:"10px"}}>
                 <span style={{color:C.tx,fontWeight:700}}>{s.sym}</span>
                 <span style={{color:s.action==="BUY"?C.g:C.r,fontWeight:700}}>{s.action}</span>
               </div>
-              <div style={{color:C.mu,fontSize:"8px"}}>{meta?.name} · {(s.strength*100).toFixed(0)}% conf</div>
+              <div style={{color:C.mu,fontSize:"8px"}}>{meta?.name} · {(s.strength*100).toFixed(0)}% · click to analyze</div>
             </div>
           );})}
           {signals.length===0&&<div style={{color:C.mu,fontSize:"10px"}}>Start engine to generate signals</div>}
         </div>
+
+        {/* Analysis History */}
+        {analysisHistory.length > 0 && (
+          <div style={S.card}>
+            <div style={S.ct}>ANALYSIS LOG ({analysisHistory.length})</div>
+            {analysisHistory.slice(0,5).map((a,i)=>{
+              const sig=a.analysis; const sc=sig?.signal?.includes("BUY")?C.g:sig?.signal?.includes("SELL")?C.r:C.a;
+              return (
+                <div key={i} style={{padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"9px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{color:C.tx,fontWeight:600}}>{a.quote?.symbol}</span>
+                    <span style={{color:sc,fontWeight:700}}>{sig?.signal} {sig?.confidence}%</span>
+                  </div>
+                  <div style={{color:C.mu}}>{a.ts} · {sig?.model} · T:₹{sig?.targetPrice?.toFixed(0)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
-  );
+  );};
 
   // ════════════════════════════════════════════════════════════════
   //  ORDERS TAB
