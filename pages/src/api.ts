@@ -57,6 +57,7 @@ export const api = {
   removeFromWatchlist: (symbol:string) => fetchAPI<string[]>("/api/user/watchlist/remove", { method:"POST", body:JSON.stringify({symbol}) }),
 
   getPortfolio: () => fetchAPI<PortfolioData>("/api/user/portfolio"),
+  resetPortfolio: (cash = 100000) => fetchAPI<any>("/api/user/portfolio/reset", { method: "POST", body: JSON.stringify({ cash }) }),
   buy: (symbol:string, quantity:number, price:number, notes?:string) =>
     fetchAPI<any>("/api/user/portfolio/buy", { method:"POST", body:JSON.stringify({symbol,quantity,price,notes}) }),
   sell: (symbol:string, quantity:number, price:number, notes?:string) =>

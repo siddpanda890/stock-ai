@@ -197,26 +197,23 @@ export default function VegaApp({ user, onLogout }) {
   const [marketLoading, setMarketLoading] = useState(true);
   const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
   const [indices,  setIndices]  = useState([]);
-  const [positions,setPositions]= useState(() => {
-    try { return JSON.parse(localStorage.getItem("vega-positions") || "[]"); } catch { return []; }
-  });
+  // Positions are session-only — not persisted to localStorage
+  // This prevents phantom cash leaks from orphaned positions on refresh
+  const [positions,setPositions]= useState([]);
   const [orders,   setOrders]   = useState([]);
   const [tradeLog, setTradeLog] = useState(() => {
     try { return JSON.parse(localStorage.getItem("vega-tradeLog") || "[]"); } catch { return []; }
   });
   const [signals,  setSignals]  = useState([]);
   const [execLog,  setExecLog]  = useState([]);
-  const [portfolio,setPortfolio]= useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("vega-portfolio") || "null");
-      if (saved) return saved;
-    } catch {}
-    return {capital:100000,cash:100000,peakCapital:100000,trades:0,wins:0};
-  });
+  // Portfolio: always starts from clean defaults, then backend overwrites on load
+  // Do NOT read from localStorage — backend KV is the single source of truth for cash
+  const [portfolio,setPortfolio]= useState({capital:100000,cash:100000,peakCapital:100000,trades:0,wins:0});
   const [engine,   setEngine]   = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("vega-engine") || "null");
-      if (saved) return { ...saved, running: saved.running || false };
+      // ALWAYS start stopped — user must explicitly click START
+      if (saved) return { ...saved, running: false };
     } catch {}
     return {
       running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
@@ -224,9 +221,8 @@ export default function VegaApp({ user, onLogout }) {
     };
   });
   // ── persist state across refresh ──────────────────────────
-  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify(engine)); }, [engine]);
-  useEffect(() => { localStorage.setItem("vega-positions", JSON.stringify(positions)); }, [positions]);
-  useEffect(() => { localStorage.setItem("vega-portfolio", JSON.stringify(portfolio)); }, [portfolio]);
+  // Engine settings (not running state) and trade log only — NOT portfolio or positions
+  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify({...engine, running: false})); }, [engine]);
   useEffect(() => { localStorage.setItem("vega-tradeLog", JSON.stringify(tradeLog)); }, [tradeLog]);
 
   const [tab,      setTab]      = useState("engine");
@@ -350,20 +346,17 @@ export default function VegaApp({ user, onLogout }) {
         });
         setIndices(indicesData);
 
-        // Load portfolio from backend — carefully map fields to avoid schema mismatch
+        // Load portfolio from backend — backend KV is the SINGLE SOURCE OF TRUTH
         try {
           const port = await api.getPortfolio();
-          setPortfolio(prev => {
-            // Backend cash is the authoritative source of truth
-            const backendCash = typeof port.cash === "number" ? port.cash : prev.cash;
-            const totalVal = backendCash + (port.totalValue - backendCash || 0);
-            return {
-              ...prev,
-              cash: backendCash,
-              capital: totalVal,
-              peakCapital: Math.max(prev.peakCapital, totalVal),
-              // DO NOT spread ...port — it has array 'trades' which conflicts with our numeric 'trades' counter
-            };
+          const backendCash = typeof port.cash === "number" ? port.cash : 100000;
+          const portfolioVal = typeof port.portfolioValue === "number" ? port.portfolioValue : backendCash;
+          setPortfolio({
+            cash: backendCash,
+            capital: portfolioVal,
+            peakCapital: Math.max(portfolioVal, 100000),
+            trades: port.totalTradeCount || 0,
+            wins: port.winCount || 0,
           });
         } catch (e) {
           console.warn("Failed to load portfolio:", e);
