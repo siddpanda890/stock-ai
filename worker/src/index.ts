@@ -32,6 +32,32 @@ import {
   removeFromWatchlist,
 } from "./portfolio";
 import { runAllStrategies } from "./strategies";
+import { analyzeSentiment, sentimentToSignal } from "./news-sentiment";
+import { detectRegime, saveRegimeState, getRegimeState } from "./regime-detector";
+import { runBacktest, type BacktestConfig } from "./backtest";
+import {
+  kellyPositionSize,
+  fixedRiskPositionSize,
+  preTradeRiskCheck,
+  recordTradeOpen,
+  recordTradeClose,
+  getDailyRiskState,
+  dynamicConfidenceThreshold,
+} from "./risk-manager";
+import {
+  saveChatHistory,
+  getChatHistory,
+  appendChatMessage,
+  clearChatHistory,
+  saveOrders,
+  getOrders,
+  addOrder,
+  updateOrderStatus,
+  saveAnalysisResult,
+  getAnalysisHistory,
+  updateAnalysisAccuracy,
+  getSignalAccuracyStats,
+} from "./persistence";
 import {
   logSignal,
   getSignals,
@@ -79,7 +105,7 @@ app.get("/", (c) =>
     version: "2.0.0",
     status: "online",
     models: Object.keys(MODELS),
-    features: ["auth", "portfolio", "watchlist", "alerts", "ai-analysis", "chat", "news", "trade-logging", "analytics", "learning-loop"],
+    features: ["auth", "portfolio", "watchlist", "alerts", "ai-analysis", "chat", "news", "trade-logging", "analytics", "learning-loop", "risk-manager", "news-sentiment", "regime-detection", "backtest", "persistence"],
   })
 );
 
@@ -252,6 +278,21 @@ app.post("/api/analyze", async (c) => {
             reasoning: analysis.summary,
             model,
           });
+          // Also persist full analysis for forward-tracking
+          await saveAnalysisResult(c.env.STOCK_AI_KV, authResult.user.id, {
+            symbol,
+            model,
+            signal: analysis.signal,
+            confidence: analysis.confidence,
+            targetPrice: analysis.targetPrice,
+            stopLoss: analysis.stopLoss,
+            summary: analysis.summary,
+            technicalAnalysis: analysis.technicalAnalysis,
+            riskAssessment: analysis.riskAssessment,
+            catalysts: analysis.catalysts,
+            timeHorizon: analysis.timeHorizon,
+            priceAtAnalysis: quote.price,
+          });
         }
       } catch { /* non-critical, don't fail the analysis */ }
     }
@@ -329,10 +370,98 @@ app.post("/api/scan", async (c) => {
       } catch { /* non-critical */ }
     }
 
+    // Add news sentiment signal
+    let sentimentSignal = null;
+    try {
+      const sentiment = await analyzeSentiment(symbol);
+      const avgVol = historicalData.slice(-20).reduce((s, d) => s + d.volume, 0) / 20;
+      sentimentSignal = sentimentToSignal(sentiment, quote, avgVol, indicators.atr);
+      signals.push(sentimentSignal);
+    } catch { /* non-critical */ }
+
+    // Add regime detection
+    let regime = null;
+    try {
+      regime = detectRegime(historicalData, indicators);
+      await saveRegimeState(c.env.STOCK_AI_KV, symbol, regime);
+    } catch { /* non-critical */ }
+
     return c.json({
       success: true,
-      data: { symbol, quote, indicators, signals, disclaimer: "Strategy signals for educational purposes only. Not financial advice." },
+      data: { symbol, quote, indicators, signals, regime, disclaimer: "Strategy signals for educational purposes only. Not financial advice." },
     });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── News Sentiment (Public) ─────────────────────────
+app.get("/api/sentiment/:symbol", async (c) => {
+  try {
+    const symbol = c.req.param("symbol").toUpperCase();
+    const sentiment = await analyzeSentiment(symbol);
+    return c.json({ success: true, data: sentiment });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Regime Detection (Public) ───────────────────────
+app.get("/api/regime/:symbol", async (c) => {
+  try {
+    const symbol = c.req.param("symbol").toUpperCase();
+
+    // Check cache first
+    const cached = await getRegimeState(c.env.STOCK_AI_KV, symbol);
+    if (cached) return c.json({ success: true, data: cached });
+
+    const data = await getHistoricalData(symbol, "6mo", "1d");
+    const indicators = calculateIndicators(data);
+    const regime = detectRegime(data, indicators);
+    await saveRegimeState(c.env.STOCK_AI_KV, symbol, regime);
+    return c.json({ success: true, data: regime });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Backtest (Public) ───────────────────────────────
+app.post("/api/backtest", async (c) => {
+  try {
+    const body = await c.req.json<BacktestConfig>();
+    if (!body.symbol) return c.json({ success: false, error: "Symbol required" }, 400);
+
+    const historicalData = await getHistoricalData(body.symbol.toUpperCase(), "2y", "1d");
+
+    const config: BacktestConfig = {
+      symbol: body.symbol.toUpperCase(),
+      strategy: body.strategy || "all",
+      initialCapital: body.initialCapital || 100000,
+      riskPerTrade: body.riskPerTrade || 0.02,
+      maxPositions: body.maxPositions || 3,
+      commissionPerTrade: body.commissionPerTrade || 20,
+    };
+
+    const result = runBacktest(historicalData, config);
+    return c.json({ success: true, data: result });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Risk Check (Public - Kelly sizing calculator) ───
+app.post("/api/risk/size", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { entryPrice, stopLoss, portfolioValue, winRate, avgWinLoss, maxRiskPerTrade } = body;
+    if (!entryPrice || !stopLoss || !portfolioValue) {
+      return c.json({ success: false, error: "entryPrice, stopLoss, portfolioValue required" }, 400);
+    }
+    const result = kellyPositionSize(
+      { maxRiskPerTrade: maxRiskPerTrade || 0.02, maxPositions: 5, dailyLossLimit: 0.05, minConfidence: 60, portfolioValue },
+      entryPrice, stopLoss, winRate || 0.5, avgWinLoss || 1.5
+    );
+    return c.json({ success: true, data: result });
   } catch (err: any) {
     return c.json({ success: false, error: err.message }, 500);
   }
@@ -644,6 +773,166 @@ app.post("/api/user/insights/analyze", async (c) => {
     const userId = c.get("userId");
     const newInsights = await analyzeRecentMistakes(c.env.STOCK_AI_KV, userId);
     return c.json({ success: true, data: newInsights });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Risk Management ─────────────────────────────────
+app.get("/api/user/risk/daily", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const state = await getDailyRiskState(c.env.STOCK_AI_KV, userId);
+    return c.json({ success: true, data: state });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.post("/api/user/risk/check", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const { maxPositions, dailyLossLimit, minConfidence, portfolioValue, signalConfidence } = await c.req.json();
+    const result = await preTradeRiskCheck(c.env.STOCK_AI_KV, userId, {
+      maxRiskPerTrade: 0.02,
+      maxPositions: maxPositions || 5,
+      dailyLossLimit: dailyLossLimit || 0.05,
+      minConfidence: minConfidence || 60,
+      portfolioValue: portfolioValue || 100000,
+    }, signalConfidence || 0);
+    return c.json({ success: true, data: result });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.post("/api/user/risk/dynamic-threshold", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const { baseThreshold } = await c.req.json();
+    // Get recent performance to compute dynamic threshold
+    const analytics = await generateAnalytics(c.env.STOCK_AI_KV, userId, "30d");
+    const overallPerf = analytics.byStrategy.length > 0
+      ? analytics.byStrategy.reduce((best, s) => s.totalTrades > best.totalTrades ? s : best, analytics.byStrategy[0])
+      : null;
+    const winRate = overallPerf ? overallPerf.winRate / 100 : 0.5;
+    const sharpe = overallPerf ? overallPerf.sharpeRatio : 0;
+    const threshold = dynamicConfidenceThreshold(baseThreshold || 65, winRate, sharpe);
+    return c.json({ success: true, data: { baseThreshold: baseThreshold || 65, adjustedThreshold: threshold, winRate, sharpe } });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Chat History Persistence ────────────────────────
+app.get("/api/user/chat/history", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const history = await getChatHistory(c.env.STOCK_AI_KV, userId);
+    return c.json({ success: true, data: history });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.post("/api/user/chat/history", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const { role, content, symbol, model } = await c.req.json();
+    if (!role || !content) return c.json({ success: false, error: "role, content required" }, 400);
+    const history = await appendChatMessage(c.env.STOCK_AI_KV, userId, { role, content, symbol, model });
+    return c.json({ success: true, data: history });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.delete("/api/user/chat/history", async (c) => {
+  try {
+    const userId = c.get("userId");
+    await clearChatHistory(c.env.STOCK_AI_KV, userId);
+    return c.json({ success: true, data: { cleared: true } });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── Order Book Persistence ──────────────────────────
+app.get("/api/user/orders", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const limit = parseInt(c.req.query("limit") || "100");
+    const orders = await getOrders(c.env.STOCK_AI_KV, userId, limit);
+    return c.json({ success: true, data: orders });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.post("/api/user/orders", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const body = await c.req.json();
+    const { symbol, side, type, quantity, price, triggerPrice, strategy, notes } = body;
+    if (!symbol || !side || !quantity || !price) {
+      return c.json({ success: false, error: "symbol, side, quantity, price required" }, 400);
+    }
+    const order = await addOrder(c.env.STOCK_AI_KV, userId, {
+      symbol: symbol.toUpperCase(), side, type: type || "MARKET",
+      quantity, price, triggerPrice, status: "PENDING",
+      strategy: strategy || "manual", notes,
+    });
+    return c.json({ success: true, data: order });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.put("/api/user/orders/:id", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const orderId = c.req.param("id");
+    const { status } = await c.req.json();
+    const updated = await updateOrderStatus(c.env.STOCK_AI_KV, userId, orderId, status, status === "FILLED" ? new Date().toISOString() : undefined);
+    if (!updated) return c.json({ success: false, error: "Order not found" }, 404);
+    return c.json({ success: true, data: updated });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// ─── AI Analysis History + Accuracy ──────────────────
+app.get("/api/user/analyses", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const limit = parseInt(c.req.query("limit") || "50");
+    const analyses = await getAnalysisHistory(c.env.STOCK_AI_KV, userId, limit);
+    return c.json({ success: true, data: analyses });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.get("/api/user/analyses/accuracy", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const stats = await getSignalAccuracyStats(c.env.STOCK_AI_KV, userId);
+    return c.json({ success: true, data: stats });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+app.post("/api/user/analyses/update-accuracy", async (c) => {
+  try {
+    const userId = c.get("userId");
+    const { analysisId, currentPrice, daysSinceAnalysis } = await c.req.json();
+    if (!analysisId || !currentPrice) {
+      return c.json({ success: false, error: "analysisId, currentPrice required" }, 400);
+    }
+    const updated = await updateAnalysisAccuracy(c.env.STOCK_AI_KV, userId, analysisId, currentPrice, daysSinceAnalysis || 1);
+    if (!updated) return c.json({ success: false, error: "Analysis not found" }, 404);
+    return c.json({ success: true, data: updated });
   } catch (err: any) {
     return c.json({ success: false, error: err.message }, 500);
   }
