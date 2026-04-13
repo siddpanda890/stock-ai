@@ -34,27 +34,11 @@ const ThemeCtx = createContext({ theme: "dark", toggle: () => {} });
 // ═══════════════════════════════════════════════════════════════
 //  CONSTANTS
 // ═══════════════════════════════════════════════════════════════
-const NSE_STOCKS = [
-  { sym:"RELIANCE",   name:"Reliance Industries", basePrice:2847.5,  sector:"Energy"       },
-  { sym:"TCS",        name:"Tata Consultancy",     basePrice:3542.0,  sector:"IT"           },
-  { sym:"HDFCBANK",   name:"HDFC Bank",            basePrice:1623.4,  sector:"Finance"      },
-  { sym:"INFY",       name:"Infosys",              basePrice:1478.2,  sector:"IT"           },
-  { sym:"ICICIBANK",  name:"ICICI Bank",           basePrice:1234.6,  sector:"Finance"      },
-  { sym:"HINDUNILVR", name:"HUL",                  basePrice:2234.8,  sector:"FMCG"         },
-  { sym:"ITC",        name:"ITC Ltd",              basePrice:467.3,   sector:"FMCG"         },
-  { sym:"WIPRO",      name:"Wipro",                basePrice:534.9,   sector:"IT"           },
-  { sym:"AXISBANK",   name:"Axis Bank",            basePrice:1123.4,  sector:"Finance"      },
-  { sym:"BAJFINANCE", name:"Bajaj Finance",        basePrice:7234.5,  sector:"Finance"      },
-  { sym:"TATAMOTORS", name:"Tata Motors",          basePrice:823.4,   sector:"Auto"         },
-  { sym:"SUNPHARMA",  name:"Sun Pharma",           basePrice:1634.2,  sector:"Pharma"       },
-  { sym:"ADANIENT",   name:"Adani Ent",            basePrice:2456.7,  sector:"Conglomerate" },
-  { sym:"MARUTI",     name:"Maruti Suzuki",        basePrice:12345.6, sector:"Auto"         },
-  { sym:"KOTAKBANK",  name:"Kotak Bank",           basePrice:1876.3,  sector:"Finance"      },
-];
-const INDICES = [
-  { name:"NIFTY 50", base:22567.2 },{ name:"SENSEX", base:74155.8 },
-  { name:"BANKNIFTY", base:48234.6 },{ name:"NIFTY IT", base:34567.1 },
-];
+const DEFAULT_SYMBOLS = ["RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","HINDUNILVR.NS","ITC.NS","WIPRO.NS","AXISBANK.NS","BAJFINANCE.NS","TATAMOTORS.NS","SUNPHARMA.NS","ADANIENT.NS","MARUTI.NS","KOTAKBANK.NS"];
+
+const INDEX_SYMBOLS = ["^NSEI","^BSESN","^NSEBANK","^CNXIT"];
+const INDEX_NAMES = {"^NSEI":"NIFTY 50","^BSESN":"SENSEX","^NSEBANK":"BANKNIFTY","^CNXIT":"NIFTY IT"};
+
 const SMETA = {
   momentum:   { name:"Momentum",       color:"#00e87a", desc:"EMA 9/21 crossover + RSI"         },
   supertrend: { name:"SuperTrend",     color:"#ffab30", desc:"ATR flip signals"                  },
@@ -185,6 +169,7 @@ function genHistory(base, n=80) {
 }
 const fmt = {
   inr:n=>"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}),
+  usd:n=>"$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),
   pct:n=>(n>=0?"+":"")+n.toFixed(2)+"%",
   num:n=>n.toLocaleString("en-IN"),
   t:()=>new Date().toLocaleTimeString("en-IN"),
@@ -193,62 +178,228 @@ const fmt = {
 // ═══════════════════════════════════════════════════════════════
 //  APP
 // ═══════════════════════════════════════════════════════════════
-export default function VegaApp() {
+export default function VegaApp({ user, onLogout }) {
   // ── theme ────────────────────────────────────────────────────
   const [theme, setTheme] = useState(() => localStorage.getItem("vega-theme") || "dark");
   const toggleTheme = useCallback(() => {
     setTheme(prev => { const next = prev === "dark" ? "light" : "dark"; localStorage.setItem("vega-theme", next); return next; });
   }, []);
+  // Sync body background with theme for scrollbar / overscroll areas
+  useEffect(() => {
+    const C = THEMES[theme];
+    document.body.style.background = C.bg;
+    document.body.style.color = C.tx;
+    document.documentElement.style.background = C.bg;
+  }, [theme]);
 
   // ── state ────────────────────────────────────────────────────
-  const [market, setMarket] = useState(() => {
-    const m={};
-    NSE_STOCKS.forEach(s=>{
-      const candles=genHistory(s.basePrice);
-      const closes=candles.map(c=>c.close);
-      m[s.sym]={...s,candles,last:candles.at(-1).close,prevClose:candles[0].close,change:0,changePct:0,
-        rsi:TA.rsi(closes),atr:TA.atr(candles),vwap:TA.vwap(candles)};
-    });
-    return m;
-  });
-  const [indices,  setIndices]  = useState(INDICES.map(i=>({...i,current:i.base,changePct:0})));
+  const [market, setMarket] = useState({});
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
+  const [indices,  setIndices]  = useState([]);
   const [positions,setPositions]= useState([]);
   const [orders,   setOrders]   = useState([]);
   const [tradeLog, setTradeLog] = useState([]);
   const [signals,  setSignals]  = useState([]);
   const [execLog,  setExecLog]  = useState([]);
   const [portfolio,setPortfolio]= useState({capital:500000,cash:500000,invested:0,dayPnL:0,peakCapital:500000,trades:0,wins:0});
-  const [engine,   setEngine]   = useState({
-    running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
-    riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
+  const [engine,   setEngine]   = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("vega-engine") || "null");
+      if (saved) return { ...saved, running: saved.running || false };
+    } catch {}
+    return {
+      running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
+      riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
+    };
   });
+  // ── persist engine state ──────────────────────────────────
+  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify(engine)); }, [engine]);
+
   const [tab,      setTab]      = useState("engine");
-  const [selSym,   setSelSym]   = useState("RELIANCE");
+  const [selSym,   setSelSym]   = useState(DEFAULT_SYMBOLS[0]);
   const [settings, setSettings] = useState({growwToken:"",anthropicKey:"",paperMode:true});
   const [aiMsgs,   setAiMsgs]   = useState([{role:"assistant",content:"⚡ VEGA online.\n\n5 strategy engines ready: Momentum, SuperTrend, Mean Reversion, Breakout, MACD.\nDynamic ATR Chandelier stop-loss active.\n\nPress ▶ START ENGINE on the Auto Engine tab to begin automated trading.",ts:fmt.t()}]);
   const [aiInput,  setAiInput]  = useState("");
   const [aiLoading,setAiLoading]= useState(false);
-  const [orderForm,setOrderForm]= useState({sym:"RELIANCE",qty:"1",side:"BUY"});
+  const [orderForm,setOrderForm]= useState({sym:DEFAULT_SYMBOLS[0],qty:"1",side:"BUY"});
+  const [searchQ, setSearchQ]   = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimer = useRef(null);
   const aiEnd=useRef(null);
   const posRef=useRef(positions), mktRef=useRef(market), portRef=useRef(portfolio), engRef=useRef(engine);
   posRef.current=positions; mktRef.current=market; portRef.current=portfolio; engRef.current=engine;
 
-  // ── market tick ───────────────────────────────────────────────
-  useEffect(()=>{
-    const id=setInterval(()=>{
-      setMarket(prev=>{
-        const next={};
-        NSE_STOCKS.forEach(s=>{
-          const st=prev[s.sym], nc=makeCandle(st.candles.at(-1),.003+Math.random()*.004);
-          const candles=[...st.candles.slice(-99),nc], closes=candles.map(c=>c.close);
-          next[s.sym]={...st,candles,last:nc.close,change:nc.close-st.prevClose,changePct:((nc.close-st.prevClose)/st.prevClose)*100,rsi:TA.rsi(closes),atr:TA.atr(candles),vwap:TA.vwap(candles)};
+  // ── load market data on mount ──────────────────────────────────
+  useEffect(() => {
+    async function loadMarketData() {
+      setMarketLoading(true);
+      try {
+        // Fetch quotes and history for each symbol
+        const marketData = {};
+        const results = await Promise.allSettled(
+          watchlistSymbols.map(async (sym) => {
+            try {
+              const [quote, histData] = await Promise.all([
+                api.getQuote(sym),
+                api.getHistory(sym, "3mo")
+              ]);
+              // api.getHistory returns { history: [...], indicators: {...} }
+              const history = histData?.history || histData;
+              return { sym, quote, history };
+            } catch (e) {
+              console.error(`Failed to load ${sym}:`, e);
+              // Fallback to mock data if API fails
+              const basePrice = 1000 + Math.random() * 5000;
+              return { sym, quote: null, history: null, fallback: true, basePrice };
+            }
+          })
+        );
+
+        // Process results
+        results.forEach((result) => {
+          if (result.status === "fulfilled") {
+            const { sym, quote, history, fallback, basePrice } = result.value;
+            let candles = [];
+            let last = quote?.price || basePrice;
+            let prevClose = quote?.previousClose || basePrice;
+            let change = quote?.change || 0;
+            let changePct = quote?.changePercent || 0;
+
+            // Convert history to candle format the TA module expects
+            if (history && Array.isArray(history) && history.length > 0) {
+              candles = history
+                .filter(h => h.close > 0) // filter null/zero candles
+                .map(h => ({
+                  time: h.date || "",
+                  open: h.open || h.close,
+                  high: h.high || h.close,
+                  low: h.low || h.close,
+                  close: h.close,
+                  volume: h.volume || 10000
+                }))
+                .slice(-80); // Keep last 80 candles
+            } else if (fallback) {
+              // Generate fallback data
+              candles = genHistory(basePrice);
+            }
+
+            if (candles.length > 0) {
+              const closes = candles.map(c => c.close);
+              marketData[sym] = {
+                sym,
+                name: quote?.name || sym.replace(".NS",""),
+                basePrice: prevClose,
+                sector: "NSE",
+                candles,
+                last,
+                prevClose,
+                change,
+                changePct,
+                rsi: TA.rsi(closes),
+                atr: TA.atr(candles),
+                vwap: TA.vwap(candles),
+                simulated: fallback || !quote
+              };
+            }
+          }
+        });
+
+        setMarket(marketData);
+
+        // Load indices
+        const indicesResults = await Promise.allSettled(
+          INDEX_SYMBOLS.map(sym => api.getQuote(sym))
+        );
+        const indicesData = [];
+        indicesResults.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            const quote = result.value;
+            indicesData.push({
+              name: INDEX_NAMES[INDEX_SYMBOLS[i]] || INDEX_SYMBOLS[i],
+              symbol: INDEX_SYMBOLS[i],
+              base: quote.previousClose || quote.price,
+              current: quote.price,
+              changePct: quote.changePercent || 0
+            });
+          } else {
+            // Fallback mock index
+            const mockBase = 50000 + Math.random() * 10000;
+            indicesData.push({
+              name: INDEX_NAMES[INDEX_SYMBOLS[i]] || INDEX_SYMBOLS[i],
+              symbol: INDEX_SYMBOLS[i],
+              base: mockBase,
+              current: mockBase * (1 + (Math.random() - 0.5) * 0.02),
+              changePct: (Math.random() - 0.5) * 2
+            });
+          }
+        });
+        setIndices(indicesData);
+
+        // Load portfolio
+        try {
+          const port = await api.getPortfolio();
+          setPortfolio(prev => ({ ...prev, ...port }));
+        } catch (e) {
+          console.warn("Failed to load portfolio:", e);
+        }
+
+      } catch (e) {
+        console.error("Market load error:", e);
+      } finally {
+        setMarketLoading(false);
+      }
+    }
+
+    loadMarketData();
+  }, [watchlistSymbols]);
+
+  // ── market tick (fetch quotes every 30 seconds) ─────────────────
+  useEffect(() => {
+    const fetchQuotes = async () => {
+      const symbols = Object.keys(market);
+      if (!symbols.length) return;
+
+      const quotes = await Promise.allSettled(symbols.map(s => api.getQuote(s)));
+      setMarket(prev => {
+        const next = { ...prev };
+        quotes.forEach((q, i) => {
+          if (q.status === "fulfilled") {
+            const sym = symbols[i];
+            const quote = q.value;
+            const st = prev[sym];
+            if (st) {
+              const newCandle = {
+                time: new Date().toLocaleTimeString("en-IN"),
+                open: quote.open || quote.price,
+                high: quote.high || quote.price,
+                low: quote.low || quote.price,
+                close: quote.price,
+                volume: quote.volume || 10000
+              };
+              const candles = [...st.candles.slice(-99), newCandle];
+              const closes = candles.map(c => c.close);
+              next[sym] = {
+                ...st,
+                candles,
+                last: quote.price,
+                change: quote.change || 0,
+                changePct: quote.changePercent || 0,
+                rsi: TA.rsi(closes),
+                atr: TA.atr(candles),
+                vwap: TA.vwap(candles)
+              };
+            }
+          }
         });
         return next;
       });
-      setIndices(prev=>prev.map(i=>{const c=i.current+(Math.random()-.488)*i.current*.0008; return {...i,current:c,changePct:((c-i.base)/i.base)*100};}));
-    },1500);
-    return ()=>clearInterval(id);
-  },[]);
+    };
+
+    const id = setInterval(fetchQuotes, 30000);
+    return () => clearInterval(id);
+  }, [Object.keys(market).join(",")]);
 
   // ── update positions ──────────────────────────────────────────
   useEffect(()=>{
@@ -277,7 +428,11 @@ export default function VegaApp() {
     setPortfolio(prev=>({...prev,cash:prev.cash+exitPrice*p.qty+(pnl<0?pnl:0),trades:prev.trades+1,wins:prev.wins+(pnl>0?1:0)}));
     const icon=reason==="SL_HIT"?"🛑":reason==="TARGET"?"🎯":"📤";
     addLog(`${icon} EXIT ${p.sym} @ ${fmt.inr(exitPrice)} | P&L:${pnl>=0?"+":""}${fmt.inr(pnl)} [${reason}]`,pnl>=0?"profit":"loss");
-    if(!settings.paperMode&&settings.growwToken) apiOrder(p.sym,p.side==="LONG"?"SELL":"BUY",p.qty);
+
+    // Sync to backend
+    api.sell(p.sym, p.qty, exitPrice, `${reason} | ${p.side}`).catch(e => {
+      addLog(`⚠️ Backend sync: ${e.message}`, "info");
+    });
   },[settings,addLog]);
 
   const openPos=useCallback((sym,side,entry,sl,target,strategy,qty,reason)=>{
@@ -286,20 +441,12 @@ export default function VegaApp() {
     setPortfolio(prev=>({...prev,cash:prev.cash-entry*qty}));
     setOrders(prev=>[{id:`${settings.paperMode?"P":"L"}-${Date.now()}`,sym,side:side==="LONG"?"BUY":"SELL",qty,price:entry.toFixed(2),status:"FILLED",strategy,ts:fmt.t()},...prev.slice(0,299)]);
     addLog(`📈 ENTER ${side} ${sym} @ ${fmt.inr(entry)} | Qty:${qty} | SL:${fmt.inr(sl)} | T:${fmt.inr(target)} [${strategy}] ${reason}`,"buy");
-    if(!settings.paperMode&&settings.growwToken) apiOrder(sym,side==="LONG"?"BUY":"SELL",qty);
-  },[settings,addLog]);
 
-  // ── GROWW API ─────────────────────────────────────────────────
-  async function apiOrder(symbol,txn,qty){
-    try{
-      const r=await fetch("https://api.groww.in/v1/order/create",{method:"POST",
-        headers:{Authorization:`Bearer ${settings.growwToken}`,"Content-Type":"application/json","X-API-VERSION":"1.0"},
-        body:JSON.stringify({validity:"DAY",exchange:"NSE",transaction_type:txn,order_type:"MARKET",price:0,product:"CNC",quantity:qty,segment:"CASH",trading_symbol:symbol})});
-      const d=await r.json();
-      if(d.status!=="SUCCESS") addLog(`❌ Groww: ${d.error?.message||"error"}`,"loss");
-      else addLog(`✅ Groww order ${d.payload?.groww_order_id} accepted`,"info");
-    }catch(e){addLog(`❌ Groww API: ${e.message}`,"loss");}
-  }
+    // Sync to backend
+    api.buy(sym, qty, entry, `${strategy} | ${reason}`).catch(e => {
+      addLog(`⚠️ Backend sync: ${e.message}`, "info");
+    });
+  },[settings,addLog]);
 
   // ── SCAN ENGINE ───────────────────────────────────────────────
   const runScan=useCallback(()=>{
@@ -335,20 +482,20 @@ export default function VegaApp() {
     if(alive.length>=eng.maxPositions) return;
 
     const liveSigs=[];
-    NSE_STOCKS.forEach(s=>{
-      const st=mkt[s.sym]; if(!st) return;
-      if(alive.find(p=>p.sym===s.sym)) return;
+    Object.keys(mkt).forEach(sym=>{
+      const st=mkt[sym]; if(!st) return;
+      if(alive.find(p=>p.sym===sym)) return;
       Object.entries(eng.strategies).forEach(([id,on])=>{
         if(!on||!SE[id]) return;
         const sig=SE[id](st);
-        if(sig.action!=="NONE") liveSigs.push({sym:s.sym,strategy:id,...sig,ltp:st.last,ts:fmt.t()});
+        if(sig.action!=="NONE") liveSigs.push({sym,strategy:id,...sig,ltp:st.last,ts:fmt.t()});
         if((sig.action==="BUY"||(sig.action==="SELL"&&eng.allowShort))&&sig.strength>=eng.minStrength){
           if(alive.length>=eng.maxPositions) return;
           const side=sig.action==="BUY"?"LONG":"SHORT";
           const qty=posSize(port.cash,eng.riskPct,sig.entry,sig.sl);
           if(sig.entry*qty>port.cash*.9||qty<1) return;
-          alive.push({sym:s.sym,id:Date.now(),side}); // optimistic push to prevent double-entry in same scan
-          openPos(s.sym,side,sig.entry,sig.sl,sig.target,id,qty,sig.reason);
+          alive.push({sym,id:Date.now(),side}); // optimistic push to prevent double-entry in same scan
+          openPos(sym,side,sig.entry,sig.sl,sig.target,id,qty,sig.reason);
         }
       });
     });
@@ -387,6 +534,27 @@ User asks: ${msg}`;
   }
   useEffect(()=>{aiEnd.current?.scrollIntoView({behavior:"smooth"});},[aiMsgs]);
 
+  // ── stock search ──────────────────────────────────────────────
+  function handleSearch(q) {
+    setSearchQ(q);
+    clearTimeout(searchTimer.current);
+    if (!q.trim()) { setSearchResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const results = await api.search(q);
+        setSearchResults(results.slice(0, 8));
+      } catch { setSearchResults([]); }
+      setSearchLoading(false);
+    }, 400);
+  }
+  async function addSymbol(sym) {
+    if (watchlistSymbols.includes(sym) || market[sym]) return;
+    setSearchQ(""); setSearchResults([]);
+    setWatchlistSymbols(prev => [...prev, sym]);
+    try { await api.addToWatchlist(sym); } catch {}
+  }
+
   // ── manual order ──────────────────────────────────────────────
   function submitOrder(e,forceSide){
     e.preventDefault();
@@ -411,20 +579,20 @@ User asks: ${msg}`;
   // ── colours (theme-driven) ────────────────────────────────────
   const C = THEMES[theme];
   const S={
-    app:{background:C.bg,color:C.tx,minHeight:"100vh",display:"flex",flexDirection:"column",fontFamily:FONT_MONO,fontSize:"12px",transition:"background .25s,color .25s"},
-    topbar:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"7px 14px",display:"flex",alignItems:"center",gap:0},
-    logo:{color:C.g,fontWeight:700,fontSize:"16px",letterSpacing:"3px",marginRight:"20px",fontFamily:FONT_UI},
-    nav:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"0 14px",display:"flex"},
-    nb:a=>({padding:"9px 15px",background:"none",border:"none",borderBottom:a?`2px solid ${C.g}`:"2px solid transparent",color:a?C.g:C.mu,cursor:"pointer",fontSize:"10px",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:"inherit",transition:"color .15s"}),
-    body:{flex:1,padding:"10px",display:"flex",gap:"10px",overflow:"hidden"},
-    card:{background:C.bg2,border:`1px solid ${C.bd}`,borderRadius:"4px",padding:"10px 12px"},
-    ct:{color:C.mu,fontSize:"8px",letterSpacing:"2px",textTransform:"uppercase",marginBottom:"8px",borderBottom:`1px solid ${C.bg3}`,paddingBottom:"5px"},
-    inp:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"3px",padding:"6px 8px",color:C.tx,fontSize:"11px",fontFamily:"inherit",width:"100%",boxSizing:"border-box",outline:"none"},
-    sel:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"3px",padding:"6px 8px",color:C.tx,fontSize:"11px",fontFamily:"inherit",width:"100%",outline:"none"},
-    btn:(col,fill)=>({background:fill?col+"22":"transparent",border:`1px solid ${col}`,borderRadius:"3px",color:col,padding:"6px 12px",cursor:"pointer",fontSize:"10px",fontFamily:"inherit",letterSpacing:"1px"}),
-    bdg:col=>({background:col+"18",border:`1px solid ${col}44`,borderRadius:"2px",color:col,padding:"2px 5px",fontSize:"9px",display:"inline-block"}),
-    row:(alt)=>({display:"grid",padding:"5px 6px",borderBottom:`1px solid ${C.bg3}`,alignItems:"center",background:alt?C.bg3+"66":"transparent"}),
-    dot:col=>({width:6,height:6,borderRadius:"50%",background:col,display:"inline-block",marginRight:5,boxShadow:`0 0 5px ${col}`}),
+    app:{background:C.bg,color:C.tx,minHeight:"100vh",display:"flex",flexDirection:"column",fontFamily:FONT_MONO,fontSize:"13px",transition:"background .25s,color .25s"},
+    topbar:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"10px 18px",display:"flex",alignItems:"center",gap:0},
+    logo:{color:C.g,fontWeight:700,fontSize:"20px",letterSpacing:"4px",marginRight:"24px",fontFamily:FONT_UI},
+    nav:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"0 18px",display:"flex"},
+    nb:a=>({padding:"11px 18px",background:"none",border:"none",borderBottom:a?`2px solid ${C.g}`:"2px solid transparent",color:a?C.g:C.mu,cursor:"pointer",fontSize:"12px",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:FONT_UI,fontWeight:500,transition:"color .15s"}),
+    body:{flex:1,padding:"12px",display:"flex",gap:"12px",overflow:"hidden"},
+    card:{background:C.bg2,border:`1px solid ${C.bd}`,borderRadius:"8px",padding:"14px 16px",transition:"background .25s,border-color .25s"},
+    ct:{color:C.mu,fontSize:"10px",letterSpacing:"2px",textTransform:"uppercase",marginBottom:"10px",borderBottom:`1px solid ${C.bg3}`,paddingBottom:"6px",fontFamily:FONT_UI,fontWeight:600},
+    inp:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"6px",padding:"9px 12px",color:C.tx,fontSize:"13px",fontFamily:FONT_MONO,width:"100%",boxSizing:"border-box",outline:"none",transition:"border-color .2s"},
+    sel:{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:"6px",padding:"9px 12px",color:C.tx,fontSize:"13px",fontFamily:FONT_MONO,width:"100%",outline:"none"},
+    btn:(col,fill)=>({background:fill?col+"22":"transparent",border:`1px solid ${col}`,borderRadius:"6px",color:col,padding:"8px 14px",cursor:"pointer",fontSize:"11px",fontFamily:FONT_UI,fontWeight:600,letterSpacing:"1px",transition:"all .15s"}),
+    bdg:col=>({background:col+"18",border:`1px solid ${col}44`,borderRadius:"4px",color:col,padding:"3px 8px",fontSize:"10px",display:"inline-block",fontFamily:FONT_UI,fontWeight:600}),
+    row:(alt)=>({display:"grid",padding:"7px 8px",borderBottom:`1px solid ${C.bg3}`,alignItems:"center",background:alt?C.bg3+"66":"transparent"}),
+    dot:col=>({width:7,height:7,borderRadius:"50%",background:col,display:"inline-block",marginRight:6,boxShadow:`0 0 6px ${col}`}),
   };
 
   // ════════════════════════════════════════════════════════════════
@@ -442,8 +610,8 @@ User asks: ${msg}`;
           {l:"DRAWDOWN",v:"-"+drawdown.toFixed(2)+"%",c:drawdown>2?C.r:C.mu},
         ].map(k=>(
           <div key={k.l} style={S.card}>
-            <div style={{fontSize:"8px",color:C.mu,letterSpacing:"1px",marginBottom:"4px"}}>{k.l}</div>
-            <div style={{fontSize:"18px",fontWeight:700,color:k.c,fontFamily:FONT_UI,letterSpacing:"-0.5px"}}>{k.v}</div>
+            <div style={{fontSize:"10px",color:C.mu,letterSpacing:"1.5px",marginBottom:"6px",fontFamily:FONT_UI,fontWeight:500}}>{k.l}</div>
+            <div style={{fontSize:"22px",fontWeight:700,color:k.c,fontFamily:FONT_UI,letterSpacing:"-0.5px"}}>{k.v}</div>
           </div>
         ))}
       </div>
@@ -455,15 +623,15 @@ User asks: ${msg}`;
           <div style={S.card}>
             <div style={S.ct}>AUTO-TRADE ENGINE</div>
             <div onClick={()=>setEngine(e=>({...e,running:!e.running}))}
-              style={{border:`2px solid ${engine.running?C.r:C.g}`,borderRadius:"4px",padding:"14px",textAlign:"center",cursor:"pointer",background:engine.running?C.r+"12":C.g+"10",marginBottom:"10px",transition:"all .2s"}}>
-              <div style={{fontSize:"20px",color:engine.running?C.r:C.g,letterSpacing:"4px",fontWeight:700}}>{engine.running?"⛔  STOP":"▶  START"}</div>
-              <div style={{fontSize:"9px",color:C.mu,marginTop:"3px"}}>{engine.running?"scanning all stocks…":"idle — click to start"}</div>
+              style={{border:`2px solid ${engine.running?C.r:C.g}`,borderRadius:"8px",padding:"18px",textAlign:"center",cursor:"pointer",background:engine.running?C.r+"12":C.g+"10",marginBottom:"12px",transition:"all .2s"}}>
+              <div style={{fontSize:"22px",color:engine.running?C.r:C.g,letterSpacing:"4px",fontWeight:700,fontFamily:FONT_UI}}>{engine.running?"⛔  STOP":"▶  START"}</div>
+              <div style={{fontSize:"11px",color:C.mu,marginTop:"5px",fontFamily:FONT_UI}}>{engine.running?"scanning all stocks…":"idle — click to start"}</div>
             </div>
-            <div style={{fontSize:"10px",color:C.mu,lineHeight:1.9}}>
+            <div style={{fontSize:"12px",color:C.mu,lineHeight:2.0,fontFamily:FONT_UI}}>
               <div style={{display:"flex",justifyContent:"space-between"}}><span>Status</span><span style={{color:engine.running?C.g:C.mu}}><span style={S.dot(engine.running?C.g:C.mu)}/>{engine.running?"ACTIVE":"IDLE"}</span></div>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span>Positions</span><span style={{color:C.tx}}>{positions.length}/{engine.maxPositions}</span></div>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span>Signals found</span><span style={{color:C.a}}>{signals.length}</span></div>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span>Scan every</span><span style={{color:C.b}}>{engine.scanInterval}s</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Positions</span><span style={{color:C.tx,fontWeight:600}}>{positions.length}/{engine.maxPositions}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Signals found</span><span style={{color:C.a,fontWeight:600}}>{signals.length}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span>Scan every</span><span style={{color:C.b,fontWeight:600}}>{engine.scanInterval}s</span></div>
               <div style={{display:"flex",justifyContent:"space-between"}}><span>Mode</span><span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span></div>
             </div>
           </div>
@@ -472,10 +640,10 @@ User asks: ${msg}`;
           <div style={S.card}>
             <div style={S.ct}>STRATEGIES</div>
             {Object.entries(SMETA).map(([id,meta])=>(
-              <div key={id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${C.bg3}`}}>
+              <div key={id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.bg3}`}}>
                 <div>
-                  <div style={{color:engine.strategies[id]?meta.color:C.mu,fontSize:"11px",fontWeight:600}}>{meta.name}</div>
-                  <div style={{color:C.mu,fontSize:"8px"}}>{meta.desc}</div>
+                  <div style={{color:engine.strategies[id]?meta.color:C.mu,fontSize:"13px",fontWeight:600,fontFamily:FONT_UI}}>{meta.name}</div>
+                  <div style={{color:C.mu,fontSize:"10px",fontFamily:FONT_UI,marginTop:2}}>{meta.desc}</div>
                 </div>
                 <div onClick={()=>setEngine(e=>({...e,strategies:{...e.strategies,[id]:!e.strategies[id]}}))}
                   style={{width:32,height:16,background:engine.strategies[id]?meta.color+"33":C.bg3,border:`1px solid ${engine.strategies[id]?meta.color:C.bd}`,borderRadius:8,cursor:"pointer",position:"relative",flexShrink:0,transition:"all .2s"}}>
@@ -496,10 +664,10 @@ User asks: ${msg}`;
               {k:"dailyLossLimit",l:"Daily Loss Halt", s:"%",  min:1,  max:10, step:.5,  sc:1 },
               {k:"scanInterval", l:"Scan Interval",    s:"s",  min:3,  max:60, step:1,   sc:1 },
             ].map(p=>(
-              <div key={p.k} style={{marginBottom:"8px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",marginBottom:"2px"}}>
+              <div key={p.k} style={{marginBottom:"10px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",marginBottom:"3px",fontFamily:FONT_UI}}>
                   <span style={{color:C.mu}}>{p.l}</span>
-                  <span style={{color:C.a}}>{(engine[p.k]*(p.sc||1)).toFixed(p.step<1?1:0)}{p.s}</span>
+                  <span style={{color:C.a,fontWeight:600}}>{(engine[p.k]*(p.sc||1)).toFixed(p.step<1?1:0)}{p.s}</span>
                 </div>
                 <input type="range" min={p.min} max={p.max} step={p.step}
                   value={engine[p.k]*(p.sc||1)}
@@ -521,15 +689,15 @@ User asks: ${msg}`;
         <div style={{...S.card,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={S.ct}>LIVE SIGNAL FEED — {signals.length} signals</div>
           <div style={{overflow:"auto",flex:1}}>
-            <div style={{...S.row(false),gridTemplateColumns:"72px 72px 52px 55px 68px 68px auto",color:C.mu,fontSize:"8px",letterSpacing:"1px",position:"sticky",top:0,background:C.bg2,zIndex:1}}>
+            <div style={{...S.row(false),gridTemplateColumns:"80px 80px 58px 60px 75px 75px auto",color:C.mu,fontSize:"10px",letterSpacing:"1px",position:"sticky",top:0,background:C.bg2,zIndex:1,fontFamily:FONT_UI,fontWeight:600}}>
               {["SYMBOL","STRATEGY","ACTION","CONF","ENTRY","SL","REASON"].map(h=><span key={h}>{h}</span>)}
             </div>
-            {signals.length===0&&<div style={{color:C.mu,textAlign:"center",padding:"40px 0",fontSize:"11px"}}>{engine.running?"Scanning…":"Start the engine"}</div>}
+            {signals.length===0&&<div style={{color:C.mu,textAlign:"center",padding:"40px 0",fontSize:"13px",fontFamily:FONT_UI}}>{engine.running?"Scanning…":"Start the engine"}</div>}
             {signals.map((s,i)=>{
               const meta=SMETA[s.strategy], isBuy=s.action==="BUY"||s.action==="HOLD_LONG";
               return (
                 <div key={i} onClick={()=>{setSelSym(s.sym);setTab("positions");}}
-                  style={{...S.row(i%2===0),gridTemplateColumns:"72px 72px 52px 55px 68px 68px auto",fontSize:"10px",cursor:"pointer"}}>
+                  style={{...S.row(i%2===0),gridTemplateColumns:"80px 80px 58px 60px 75px 75px auto",fontSize:"12px",cursor:"pointer"}}>
                   <span style={{color:C.tx,fontWeight:700}}>{s.sym}</span>
                   <span style={S.bdg(meta?.color||C.mu)}>{s.strategy}</span>
                   <span style={{color:isBuy?C.g:C.r,fontWeight:700,fontSize:"11px"}}>{s.action}</span>
@@ -577,7 +745,18 @@ User asks: ${msg}`;
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
             <div style={{...S.ct,marginBottom:0}}>{selSym} — {selSt?fmt.inr(selSt.last):"—"}{selSt&&<span style={{color:selSt.changePct>=0?C.g:C.r,marginLeft:8}}>{fmt.pct(selSt.changePct)}</span>}</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {NSE_STOCKS.slice(0,7).map(s=><button key={s.sym} onClick={()=>setSelSym(s.sym)} style={{...S.btn(selSym===s.sym?C.g:C.bd),padding:"2px 6px",fontSize:"9px"}}>{s.sym.slice(0,4)}</button>)}
+              {Object.keys(market).slice(0,7).map(s=><button key={s} onClick={()=>setSelSym(s)} style={{...S.btn(selSym===s?C.g:C.bd),padding:"2px 6px",fontSize:"9px"}}>{(market[s]?.name||s).slice(0,6)}</button>)}
+              <div style={{position:"relative"}}>
+                <input value={searchQ} onChange={e=>handleSearch(e.target.value)} placeholder="Search…" style={{...S.inp,width:100,padding:"2px 6px",fontSize:"9px"}}/>
+                {searchResults.length>0&&<div style={{position:"absolute",top:"100%",right:0,zIndex:10,background:C.bg2,border:`1px solid ${C.bd}`,borderRadius:6,padding:4,minWidth:200,maxHeight:200,overflow:"auto",boxShadow:"0 8px 24px rgba(0,0,0,.4)"}}>
+                  {searchResults.map(r=>(
+                    <div key={r.symbol} onClick={()=>{addSymbol(r.symbol);setSelSym(r.symbol);}} style={{padding:"5px 8px",cursor:"pointer",fontSize:"10px",borderBottom:`1px solid ${C.bg3}`,display:"flex",justifyContent:"space-between"}}>
+                      <span style={{color:C.g,fontWeight:700}}>{r.symbol}</span>
+                      <span style={{color:C.mu,fontSize:"9px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+                    </div>
+                  ))}
+                </div>}
+              </div>
             </div>
           </div>
           {selSt&&<div style={{display:"flex",gap:12,marginBottom:5,fontSize:"9px",color:C.mu}}>
@@ -686,7 +865,7 @@ User asks: ${msg}`;
             <div style={{marginBottom:8}}>
               <div style={{color:C.mu,fontSize:"8px",marginBottom:3}}>SYMBOL</div>
               <select value={orderForm.sym} onChange={e=>setOrderForm(p=>({...p,sym:e.target.value}))} style={S.sel}>
-                {NSE_STOCKS.map(s=><option key={s.sym}>{s.sym}</option>)}
+                {Object.keys(market).map(s=><option key={s}>{s}</option>)}
               </select>
             </div>
             <div style={{marginBottom:8}}>
@@ -712,8 +891,8 @@ User asks: ${msg}`;
   //  SCANNER TAB
   // ════════════════════════════════════════════════════════════════
   const ScannerTab=()=>{
-    const rows=NSE_STOCKS.map(s=>{
-      const st=market[s.sym]; if(!st) return null;
+    const rows=Object.values(market).map(s=>{
+      const st=s; if(!st) return null;
       const closes=st.candles.map(c=>c.close), bb=TA.bollinger(closes), st2=TA.supertrend(st.candles), mc=TA.macd(closes);
       const pctB=Math.round(((st.last-bb.lower)/(bb.upper-bb.lower))*100);
       const allS=Object.entries(SE).map(([id,fn])=>({id,...fn(st)}));
@@ -790,15 +969,15 @@ User asks: ${msg}`;
       <div style={{display:"flex",flexDirection:"column",gap:"10px",overflow:"auto"}}>
         <div style={S.card}>
           <div style={S.ct}>MARKET PULSE</div>
-          {NSE_STOCKS.slice(0,8).map(s=>{const st=market[s.sym]; return st?(
+          {Object.values(market).slice(0,8).map(s=>(
             <div key={s.sym} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"10px"}}>
               <span style={{color:C.tx}}>{s.sym}</span>
               <div style={{textAlign:"right"}}>
-                <div style={{color:st.changePct>=0?C.g:C.r}}>{fmt.pct(st.changePct)}</div>
-                <div style={{color:C.mu,fontSize:"8px"}}>RSI {st.rsi.toFixed(0)}</div>
+                <div style={{color:s.changePct>=0?C.g:C.r}}>{fmt.pct(s.changePct)}</div>
+                <div style={{color:C.mu,fontSize:"8px"}}>RSI {s.rsi.toFixed(0)}</div>
               </div>
             </div>
-          ):null;})}
+          ))}
         </div>
         <div style={S.card}>
           <div style={S.ct}>TOP SIGNALS</div>
@@ -889,7 +1068,7 @@ User asks: ${msg}`;
             <div>• SHORT SL = LowestLow(14) + ATR × mult</div>
             <div>• Stop <span style={{color:C.g}}>ratchets up only</span> — never retreats</div>
             <div>• Widens in volatile markets automatically</div>
-            <div>• Checked every tick (1.5s)</div>
+            <div>• Checked every tick (30s market update)</div>
             <div style={{marginTop:6,padding:"6px 8px",background:C.bg3,borderRadius:3,color:C.mu,fontSize:"9px"}}>
               Minimum R:R = {(engine.atrMult*1.5/engine.atrMult).toFixed(1)}×. Min confidence = {(engine.minStrength*100).toFixed(0)}%. Position size = Risk ₹ ÷ SL distance per share.
             </div>
@@ -959,23 +1138,30 @@ User asks: ${msg}`;
       <div style={S.topbar}>
         <div style={S.logo}>⚡ VEGA</div>
         {indices.map(idx=>(
-          <div key={idx.name} style={{padding:"3px 10px",borderRadius:3,background:idx.changePct>=0?C.g+"10":C.r+"10",border:`1px solid ${idx.changePct>=0?C.g+"30":C.r+"30"}`,marginRight:7}}>
-            <span style={{color:C.mu,fontSize:"9px",marginRight:5}}>{idx.name}</span>
-            <span style={{color:idx.changePct>=0?C.g:C.r,fontWeight:700}}>{idx.current.toLocaleString("en-IN",{maximumFractionDigits:1})}</span>
-            <span style={{color:idx.changePct>=0?C.g:C.r,fontSize:"9px",marginLeft:5}}>{fmt.pct(idx.changePct)}</span>
+          <div key={idx.name} style={{padding:"5px 12px",borderRadius:6,background:idx.changePct>=0?C.g+"10":C.r+"10",border:`1px solid ${idx.changePct>=0?C.g+"30":C.r+"30"}`,marginRight:8}}>
+            <span style={{color:C.mu,fontSize:"10px",marginRight:6,fontFamily:FONT_UI}}>{idx.name}</span>
+            <span style={{color:idx.changePct>=0?C.g:C.r,fontWeight:700,fontSize:"13px"}}>{idx.current.toLocaleString("en-IN",{maximumFractionDigits:1})}</span>
+            <span style={{color:idx.changePct>=0?C.g:C.r,fontSize:"11px",marginLeft:5}}>{fmt.pct(idx.changePct)}</span>
           </div>
         ))}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
-          <span style={{color:C.mu,fontSize:"10px"}}>{new Date().toLocaleTimeString("en-IN")}</span>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12}}>
+          <span style={{color:C.mu,fontSize:"12px",fontFamily:FONT_MONO}}>{new Date().toLocaleTimeString("en-IN")}</span>
           <span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span>
-          <span style={S.bdg(engine.running?C.g:C.mu)}>{engine.running?"TRADING":"IDLE"}</span>
-          <span style={{color:C.mu,fontSize:"9px"}}>{positions.length}pos · {signals.length}sig · {portfolio.trades}trades</span>
+          <span style={S.bdg(engine.running?C.g:C.mu)}>{engine.running?"RUNNING":"IDLE"}</span>
+          <span style={{color:C.mu,fontSize:"11px",fontFamily:FONT_UI}}>{positions.length} pos · {signals.length} sig</span>
           <button onClick={toggleTheme}
-            style={{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:4,padding:"3px 8px",cursor:"pointer",fontSize:"13px",color:C.tx,lineHeight:1,transition:"all .2s"}}
+            style={{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:6,padding:"6px 12px",cursor:"pointer",fontSize:"14px",color:C.tx,lineHeight:1,transition:"all .2s",display:"flex",alignItems:"center",gap:6}}
             title={theme==="dark"?"Switch to light theme":"Switch to dark theme"}>
-            {theme==="dark"?"☀️":"🌙"}
+            {theme==="dark"?"☀️":"🌙"}<span style={{fontSize:"10px",fontFamily:FONT_UI,fontWeight:500}}>{theme==="dark"?"Light":"Dark"}</span>
           </button>
-          <div style={{width:7,height:7,borderRadius:"50%",background:C.g,boxShadow:`0 0 6px ${C.g}`}}/>
+          {user && <>
+            <span style={{color:C.g,fontSize:"12px",fontWeight:600,fontFamily:FONT_UI}}>{user.username}</span>
+            <button onClick={onLogout}
+              style={{background:"transparent",border:`1px solid ${C.mu}`,borderRadius:6,color:C.mu,padding:"5px 10px",fontFamily:FONT_UI,fontSize:"10px",cursor:"pointer",letterSpacing:"1px",fontWeight:600,transition:"all .2s"}}>
+              LOGOUT
+            </button>
+          </>}
+          <div style={{width:8,height:8,borderRadius:"50%",background:C.g,boxShadow:`0 0 8px ${C.g}`}}/>
         </div>
       </div>
 
@@ -983,18 +1169,28 @@ User asks: ${msg}`;
       <div style={S.nav}>
         {TABS.map(t=><button key={t.id} style={S.nb(tab===t.id)} onClick={()=>setTab(t.id)}>{t.l}</button>)}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",padding:"0 12px"}}>
-          <span style={{color:C.g,fontSize:"9px"}}>● NSE LIVE</span>
+          <span style={{color:C.g,fontSize:"11px",fontFamily:FONT_UI,fontWeight:600}}>● LIVE API</span>
         </div>
       </div>
 
       {/* BODY */}
       <div style={S.body}>
-        {tab==="engine"    && <EngineTab/>}
-        {tab==="positions" && <PositionsTab/>}
-        {tab==="scanner"   && <ScannerTab/>}
-        {tab==="ai"        && <AITab/>}
-        {tab==="orders"    && <OrdersTab/>}
-        {tab==="settings"  && <SettingsTab/>}
+        {marketLoading ? (
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+            <div style={{color:C.g,fontSize:"28px",fontWeight:700,fontFamily:FONT_UI,letterSpacing:"6px",animation:"pulse 1.5s infinite"}}>⚡ VEGA</div>
+            <div style={{color:C.mu,fontSize:"13px",fontFamily:FONT_UI}}>Loading real-time market data from Yahoo Finance…</div>
+            <div style={{color:C.mu,fontSize:"11px",fontFamily:FONT_MONO}}>Fetching {watchlistSymbols.length} stocks + {INDEX_SYMBOLS.length} indices</div>
+          </div>
+        ) : (
+          <>
+            {tab==="engine"    && <EngineTab/>}
+            {tab==="positions" && <PositionsTab/>}
+            {tab==="scanner"   && <ScannerTab/>}
+            {tab==="ai"        && <AITab/>}
+            {tab==="orders"    && <OrdersTab/>}
+            {tab==="settings"  && <SettingsTab/>}
+          </>
+        )}
       </div>
     </div>
   );
