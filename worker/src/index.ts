@@ -47,9 +47,13 @@ type AuthEnv = { user: User; userId: string };
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthEnv }>();
 
-// CORS
+// CORS — support multiple origins from env
 app.use("*", cors({
-  origin: "*",
+  origin: (origin, c) => {
+    const allowed = (c.env?.CORS_ORIGIN || "*").split(",").map((s: string) => s.trim());
+    if (allowed.includes("*")) return "*";
+    return allowed.includes(origin) ? origin : allowed[0];
+  },
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
 }));
