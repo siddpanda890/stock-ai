@@ -31,7 +31,7 @@ interface Env {
   VERTEX_LOCATION: string;
   VERTEX_SERVICE_ACCOUNT_JSON: string;
   ANTHROPIC_API_KEY: string;
-  OPENAI_API_KEY?: string;
+  AZURE_OPENAI_API_KEY?: string;
 }
 
 const SYSTEM_PROMPT = `You are an elite AI stock analyst with deep expertise in technical analysis, fundamental analysis, and quantitative trading. You work for a hedge fund and provide precise, actionable analysis.
@@ -118,7 +118,7 @@ Respond ONLY with the JSON object, no markdown or extra text.`;
       serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
     },
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    openaiApiKey: env.OPENAI_API_KEY,
+    azureOpenaiApiKey: env.AZURE_OPENAI_API_KEY,
   };
 
   const response = await callAI(
@@ -163,7 +163,7 @@ export async function chat(
       serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
     },
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    openaiApiKey: env.OPENAI_API_KEY,
+    azureOpenaiApiKey: env.AZURE_OPENAI_API_KEY,
   };
 
   const systemWithContext = stockContext

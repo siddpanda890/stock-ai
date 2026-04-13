@@ -1048,12 +1048,14 @@ User asks: ${msg}`;
                 <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                 <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
               </optgroup>
-              <optgroup label="GPT (OpenAI)">
+              <optgroup label="GPT (Azure OpenAI)">
+                <option value="gpt-5.4-pro">GPT-5.4 Pro</option>
                 <option value="gpt-5.4">GPT-5.4</option>
-                <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                <option value="o4-mini">o4-mini (Reasoning)</option>
+                <option value="gpt-4.1">GPT-4.1</option>
               </optgroup>
             </select>
-            <span style={S.bdg(C.pu)}>{aiModel.includes("gemini")?"GEMINI":aiModel.includes("gpt")?"GPT":aiModel.split("-")[0].toUpperCase()}</span>
+            <span style={S.bdg(C.pu)}>{aiModel.includes("gemini")?"GEMINI":aiModel.includes("gpt")||aiModel==="o4-mini"?"GPT":aiModel.split("-")[0].toUpperCase()}</span>
           </div>
         </div>
         <div style={{flex:1,overflow:"auto",marginBottom:8}}>
