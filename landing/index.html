@@ -380,7 +380,8 @@ async function loadTicker() {
       try {
         const r = await fetch(`${API}/api/quote/${encodeURIComponent(t.sym)}`);
         if (r.ok) {
-          const d = await r.json();
+          const res = await r.json();
+          const d = res.data || res;
           const pct = d.changePercent || 0;
           const color = pct >= 0 ? "var(--g)" : "var(--r)";
           const sign = pct >= 0 ? "+" : "";
