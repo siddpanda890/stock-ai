@@ -489,9 +489,10 @@ export default function VegaApp({ user, onLogout }) {
     const closedIds=new Set();
     toClose.forEach(({p,ltp,reason})=>{if(!closedIds.has(p.id)){closedIds.add(p.id);closePos({...p,ltp},ltp,reason);}});
 
-    // 2. Daily loss halt
-    const dd=port.peakCapital>0?((port.peakCapital-(port.cash+port.invested+port.dayPnL))/port.peakCapital)*100:0;
-    if(dd>=eng.dailyLossLimit){setEngine(e=>({...e,running:false}));addLog(`⛔ Daily loss limit ${eng.dailyLossLimit}% hit. Engine halted.`,"loss");return;}
+    // 2. Daily loss halt (only check if trades have been made)
+    const currentVal=port.cash+port.invested+port.dayPnL;
+    const dd=port.peakCapital>0&&port.trades>0?Math.max(0,((port.peakCapital-currentVal)/port.peakCapital)*100):0;
+    if(dd>=eng.dailyLossLimit){setEngine(e=>({...e,running:false}));addLog(`⛔ Daily loss limit ${eng.dailyLossLimit}% hit (DD: ${dd.toFixed(1)}%). Engine halted.`,"loss");return;}
 
     // 3. Scan for entries
     const alive=pos.filter(p=>!closedIds.has(p.id));
