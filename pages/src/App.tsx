@@ -4,9 +4,9 @@ import VegaApp from "./VegaApp";
 
 // ─── Auth Styles ──────────────────────────────────────
 const AUTH_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 * { box-sizing:border-box; margin:0; padding:0; }
-body { background:#090b0f; color:#b8bfd0; font-family:'JetBrains Mono','Fira Code',monospace; }
+body { background:#090b0f; color:#b8bfd0; font-family:'IBM Plex Mono','JetBrains Mono','Fira Code',monospace; }
 ::-webkit-scrollbar { width:3px } ::-webkit-scrollbar-track { background:#090b0f } ::-webkit-scrollbar-thumb { background:#1a1f2e; border-radius:2px }
 
 .auth-page { min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(ellipse at 50% 0%, #0d1a12 0%, #090b0f 60%); position:relative; overflow:hidden; }
@@ -15,7 +15,7 @@ body { background:#090b0f; color:#b8bfd0; font-family:'JetBrains Mono','Fira Cod
 
 .auth-card { position:relative; z-index:1; width:100%; max-width:420px; background:#0d0f16; border:1px solid #1a1f2e; border-radius:8px; padding:40px 36px; }
 .auth-logo { text-align:center; margin-bottom:32px; }
-.auth-logo span { color:#00e87a; font-size:28px; font-weight:700; letter-spacing:4px; font-family:sans-serif; }
+.auth-logo span { color:#00e87a; font-size:28px; font-weight:700; letter-spacing:4px; font-family:'Inter','Segoe UI',sans-serif; }
 .auth-logo p { color:#3a4055; font-size:10px; letter-spacing:2px; text-transform:uppercase; margin-top:6px; }
 
 .auth-tabs { display:flex; margin-bottom:28px; border-bottom:1px solid #1a1f2e; }

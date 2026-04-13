@@ -1,8 +1,35 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart
 } from "recharts";
+import { api } from "./api";
+
+// ═══════════════════════════════════════════════════════════════
+//  THEME SYSTEM
+// ═══════════════════════════════════════════════════════════════
+const FONT_MONO = "'IBM Plex Mono','JetBrains Mono','Fira Code',monospace";
+const FONT_UI   = "'Inter','Segoe UI','Helvetica Neue',sans-serif";
+
+const THEMES = {
+  dark: {
+    bg:"#090b0f", bg2:"#0d0f16", bg3:"#111420", bd:"#1a1f2e",
+    tx:"#b8bfd0", mu:"#3a4055", g:"#00e87a", r:"#ff3d5a",
+    a:"#ffab30", b:"#5b9ef7", pu:"#a78bfa",
+    userMsg:"#0e1a2a", userMsgBd:"#1a3050",
+    tooltipBg:"#0d0f16", tooltipBd:"#1a1f2e",
+    scrollTrack:"#090b0f", scrollThumb:"#1a1f2e",
+  },
+  light: {
+    bg:"#f4f5f7", bg2:"#ffffff", bg3:"#e8eaef", bd:"#d1d5db",
+    tx:"#1f2937", mu:"#6b7280", g:"#059669", r:"#dc2626",
+    a:"#d97706", b:"#2563eb", pu:"#7c3aed",
+    userMsg:"#eff6ff", userMsgBd:"#bfdbfe",
+    tooltipBg:"#ffffff", tooltipBd:"#d1d5db",
+    scrollTrack:"#f4f5f7", scrollThumb:"#d1d5db",
+  },
+};
+const ThemeCtx = createContext({ theme: "dark", toggle: () => {} });
 
 // ═══════════════════════════════════════════════════════════════
 //  CONSTANTS
@@ -167,6 +194,12 @@ const fmt = {
 //  APP
 // ═══════════════════════════════════════════════════════════════
 export default function VegaApp() {
+  // ── theme ────────────────────────────────────────────────────
+  const [theme, setTheme] = useState(() => localStorage.getItem("vega-theme") || "dark");
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => { const next = prev === "dark" ? "light" : "dark"; localStorage.setItem("vega-theme", next); return next; });
+  }, []);
+
   // ── state ────────────────────────────────────────────────────
   const [market, setMarket] = useState(() => {
     const m={};
@@ -339,19 +372,17 @@ export default function VegaApp() {
     setAiMsgs(prev=>[...prev,{role:"user",content:msg,ts:fmt.t()}]);
     setAiInput(""); setAiLoading(true);
     const port=portRef.current, pos=posRef.current;
-    const sys=`You are VEGA — elite AI trading agent for NSE India.
-Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(port.dayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
+    const contextMsg = `[VEGA Context] Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(port.dayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
 Positions: ${pos.map(p=>`${p.sym} ${p.side} ${p.qty}@₹${p.entryPrice.toFixed(0)} SL:₹${p.sl?.toFixed(0)} P&L:${fmt.inr(p.pnl)}`).join(" | ")||"none"}
 Signals: ${signals.slice(0,5).map(s=>`${s.sym} ${s.action}(${(s.strength*100).toFixed(0)}%) via ${s.strategy}`).join(" | ")||"none"}
-Be concise, use emojis, give INR levels.`;
+User asks: ${msg}`;
     try{
-      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
-        headers:{"Content-Type":"application/json",...(settings.anthropicKey?{"x-api-key":settings.anthropicKey}:{})},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,system:sys,
-          messages:[...aiMsgs.slice(-6).map(m=>({role:m.role,content:m.content})),{role:"user",content:msg}]})});
-      const d=await r.json();
-      setAiMsgs(prev=>[...prev,{role:"assistant",content:d.content?.[0]?.text||"Add Anthropic API key in Settings.",ts:fmt.t()}]);
-    }catch{setAiMsgs(prev=>[...prev,{role:"assistant",content:"⚠️ Add Anthropic API key in Settings for full AI analysis.",ts:fmt.t()}]);}
+      const chatMsgs = [...aiMsgs.slice(-6).map(m=>({role:m.role,content:m.content})),{role:"user",content:contextMsg}];
+      const data = await api.chat(chatMsgs, selSym, "sonnet-4.6");
+      setAiMsgs(prev=>[...prev,{role:"assistant",content:data.response||"No response received.",ts:fmt.t()}]);
+    }catch(e){
+      setAiMsgs(prev=>[...prev,{role:"assistant",content:`⚠️ AI Error: ${e.message}. Check backend connection.`,ts:fmt.t()}]);
+    }
     setAiLoading(false);
   }
   useEffect(()=>{aiEnd.current?.scrollIntoView({behavior:"smooth"});},[aiMsgs]);
@@ -377,13 +408,12 @@ Be concise, use emojis, give INR levels.`;
   const drawdown=portfolio.peakCapital>0?((portfolio.peakCapital-(portfolio.cash+portfolio.invested+portfolio.dayPnL))/portfolio.peakCapital)*100:0;
   const winRate=portfolio.trades>0?(portfolio.wins/portfolio.trades*100).toFixed(0):"—";
 
-  // ── colours ───────────────────────────────────────────────────
-  const C={bg:"#090b0f",bg2:"#0d0f16",bg3:"#111420",bd:"#1a1f2e",tx:"#b8bfd0",mu:"#3a4055",
-           g:"#00e87a",r:"#ff3d5a",a:"#ffab30",b:"#5b9ef7",pu:"#a78bfa"};
+  // ── colours (theme-driven) ────────────────────────────────────
+  const C = THEMES[theme];
   const S={
-    app:{background:C.bg,color:C.tx,minHeight:"100vh",display:"flex",flexDirection:"column",fontFamily:"'JetBrains Mono','Fira Code',monospace",fontSize:"12px"},
+    app:{background:C.bg,color:C.tx,minHeight:"100vh",display:"flex",flexDirection:"column",fontFamily:FONT_MONO,fontSize:"12px",transition:"background .25s,color .25s"},
     topbar:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"7px 14px",display:"flex",alignItems:"center",gap:0},
-    logo:{color:C.g,fontWeight:700,fontSize:"16px",letterSpacing:"3px",marginRight:"20px",fontFamily:"sans-serif"},
+    logo:{color:C.g,fontWeight:700,fontSize:"16px",letterSpacing:"3px",marginRight:"20px",fontFamily:FONT_UI},
     nav:{background:C.bg2,borderBottom:`1px solid ${C.bd}`,padding:"0 14px",display:"flex"},
     nb:a=>({padding:"9px 15px",background:"none",border:"none",borderBottom:a?`2px solid ${C.g}`:"2px solid transparent",color:a?C.g:C.mu,cursor:"pointer",fontSize:"10px",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:"inherit",transition:"color .15s"}),
     body:{flex:1,padding:"10px",display:"flex",gap:"10px",overflow:"hidden"},
@@ -413,7 +443,7 @@ Be concise, use emojis, give INR levels.`;
         ].map(k=>(
           <div key={k.l} style={S.card}>
             <div style={{fontSize:"8px",color:C.mu,letterSpacing:"1px",marginBottom:"4px"}}>{k.l}</div>
-            <div style={{fontSize:"18px",fontWeight:700,color:k.c,fontFamily:"sans-serif",letterSpacing:"-0.5px"}}>{k.v}</div>
+            <div style={{fontSize:"18px",fontWeight:700,color:k.c,fontFamily:FONT_UI,letterSpacing:"-0.5px"}}>{k.v}</div>
           </div>
         ))}
       </div>
@@ -567,7 +597,7 @@ Be concise, use emojis, give INR levels.`;
                 </defs>
                 <XAxis dataKey="t" tick={{fill:C.mu,fontSize:8}} tickLine={false} axisLine={false} interval={8}/>
                 <YAxis domain={["auto","auto"]} tick={{fill:C.mu,fontSize:8}} tickLine={false} axisLine={false} tickFormatter={v=>"₹"+v.toFixed(0)} width={54}/>
-                <Tooltip contentStyle={{background:C.bg2,border:`1px solid ${C.bd}`,fontSize:10,borderRadius:3}} formatter={v=>[fmt.inr(v),"Price"]}/>
+                <Tooltip contentStyle={{background:C.tooltipBg,border:`1px solid ${C.tooltipBd}`,fontSize:10,borderRadius:3,color:C.tx}} formatter={v=>[fmt.inr(v),"Price"]}/>
                 {selPos&&<ReferenceLine y={selPos.sl}          stroke={C.r}  strokeDasharray="3 2" label={{value:"SL",fill:C.r,fontSize:8}}/>}
                 {selPos&&<ReferenceLine y={selPos.target}      stroke={C.b}  strokeDasharray="3 2" label={{value:"T", fill:C.b,fontSize:8}}/>}
                 {selPos&&<ReferenceLine y={selPos.entryPrice}  stroke={C.a}  strokeDasharray="3 2" label={{value:"E", fill:C.a,fontSize:8}}/>}
@@ -736,12 +766,12 @@ Be concise, use emojis, give INR levels.`;
         </div>
         <div style={{flex:1,overflow:"auto",marginBottom:8}}>
           {aiMsgs.map((m,i)=>(
-            <div key={i} style={{padding:"8px",borderRadius:3,marginBottom:6,background:m.role==="user"?"#0e1a2a":C.bg3,border:`1px solid ${m.role==="user"?"#1a3050":C.bd}`}}>
+            <div key={i} style={{padding:"8px",borderRadius:3,marginBottom:6,background:m.role==="user"?C.userMsg:C.bg3,border:`1px solid ${m.role==="user"?C.userMsgBd:C.bd}`}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
                 <span style={{color:m.role==="user"?C.b:C.g,fontSize:"9px",fontWeight:700}}>{m.role==="user"?"YOU":"⚡ VEGA"}</span>
                 <span style={{color:C.mu,fontSize:"9px"}}>{m.ts}</span>
               </div>
-              <div style={{color:"#aab0c0",whiteSpace:"pre-wrap",lineHeight:1.65,fontSize:"11px"}}>{m.content}</div>
+              <div style={{color:C.tx,whiteSpace:"pre-wrap",lineHeight:1.65,fontSize:"11px"}}>{m.content}</div>
             </div>
           ))}
           {aiLoading&&<div style={{...S.card,color:C.mu,fontSize:"11px",animation:"pulse 1s infinite"}}>VEGA analyzing market data…</div>}
@@ -852,7 +882,7 @@ Be concise, use emojis, give INR levels.`;
         <div style={S.card}>
           <div style={S.ct}>ATR CHANDELIER STOP ENGINE</div>
           <div style={{fontSize:"10px",color:C.mu,lineHeight:1.9}}>
-            <div style={{color:"#aaa",marginBottom:5}}>Algorithm: <span style={{color:C.g}}>Chandelier Exit v2 (Ratchet)</span></div>
+            <div style={{color:C.tx,marginBottom:5}}>Algorithm: <span style={{color:C.g}}>Chandelier Exit v2 (Ratchet)</span></div>
             <div>• ATR period: <span style={{color:C.a}}>14 candles</span></div>
             <div>• Active mult: <span style={{color:C.a}}>{engine.atrMult}×</span></div>
             <div>• LONG SL = HighestHigh(14) − ATR × mult</div>
@@ -860,7 +890,7 @@ Be concise, use emojis, give INR levels.`;
             <div>• Stop <span style={{color:C.g}}>ratchets up only</span> — never retreats</div>
             <div>• Widens in volatile markets automatically</div>
             <div>• Checked every tick (1.5s)</div>
-            <div style={{marginTop:6,padding:"6px 8px",background:C.bg3,borderRadius:3,color:"#555",fontSize:"9px"}}>
+            <div style={{marginTop:6,padding:"6px 8px",background:C.bg3,borderRadius:3,color:C.mu,fontSize:"9px"}}>
               Minimum R:R = {(engine.atrMult*1.5/engine.atrMult).toFixed(1)}×. Min confidence = {(engine.minStrength*100).toFixed(0)}%. Position size = Risk ₹ ÷ SL distance per share.
             </div>
           </div>
@@ -916,12 +946,13 @@ Be concise, use emojis, give INR levels.`;
   return (
     <div style={S.app}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:#090b0f}::-webkit-scrollbar-thumb{background:#1a1f2e;border-radius:2px}
-        input:focus,select:focus{border-color:#00e87a!important}
+        ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:${C.scrollTrack}}::-webkit-scrollbar-thumb{background:${C.scrollThumb};border-radius:2px}
+        input:focus,select:focus{border-color:${C.g}!important;box-shadow:0 0 0 1px ${C.g}33}
         button:hover{opacity:.82}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
       `}</style>
 
       {/* TOPBAR */}
@@ -939,6 +970,11 @@ Be concise, use emojis, give INR levels.`;
           <span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span>
           <span style={S.bdg(engine.running?C.g:C.mu)}>{engine.running?"TRADING":"IDLE"}</span>
           <span style={{color:C.mu,fontSize:"9px"}}>{positions.length}pos · {signals.length}sig · {portfolio.trades}trades</span>
+          <button onClick={toggleTheme}
+            style={{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:4,padding:"3px 8px",cursor:"pointer",fontSize:"13px",color:C.tx,lineHeight:1,transition:"all .2s"}}
+            title={theme==="dark"?"Switch to light theme":"Switch to dark theme"}>
+            {theme==="dark"?"☀️":"🌙"}
+          </button>
           <div style={{width:7,height:7,borderRadius:"50%",background:C.g,boxShadow:`0 0 6px ${C.g}`}}/>
         </div>
       </div>

@@ -1,0 +1,92 @@
+name: Deploy Stock AI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+jobs:
+  # ─── Build & Test ────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            worker/package-lock.json
+            pages/package-lock.json
+
+      - name: Install worker deps
+        working-directory: worker
+        run: npm ci
+
+      - name: Install pages deps
+        working-directory: pages
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: pages
+        env:
+          VITE_API_URL: https://stock-ai-api.sidd-panda890.workers.dev
+        run: npx vite build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-dist
+          path: pages/dist/
+
+  # ─── Deploy Worker ──────────────────────────────
+  deploy-worker:
+    name: Deploy Worker
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install deps
+        working-directory: worker
+        run: npm ci
+
+      - name: Deploy to Cloudflare Workers
+        working-directory: worker
+        run: npx wrangler deploy
+
+  # ─── Deploy Pages ───────────────────────────────
+  deploy-pages:
+    name: Deploy Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pages-dist
+          path: dist/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Pages
+        run: wrangler pages deploy dist/ --project-name=stock-ai-dashboard --commit-dirty=true
