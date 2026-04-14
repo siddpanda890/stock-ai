@@ -197,23 +197,25 @@ export default function VegaApp({ user, onLogout }) {
   const [marketLoading, setMarketLoading] = useState(true);
   const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
   const [indices,  setIndices]  = useState([]);
-  // Positions are session-only — not persisted to localStorage
-  // This prevents phantom cash leaks from orphaned positions on refresh
-  const [positions,setPositions]= useState([]);
+  // Positions persisted to localStorage for continuity across refresh
+  const [positions,setPositions]= useState(() => {
+    try { return JSON.parse(localStorage.getItem("vega-positions") || "[]"); } catch { return []; }
+  });
   const [orders,   setOrders]   = useState([]);
   const [tradeLog, setTradeLog] = useState(() => {
     try { return JSON.parse(localStorage.getItem("vega-tradeLog") || "[]"); } catch { return []; }
   });
   const [signals,  setSignals]  = useState([]);
   const [execLog,  setExecLog]  = useState([]);
-  // Portfolio: always starts from clean defaults, then backend overwrites on load
-  // Do NOT read from localStorage — backend KV is the single source of truth for cash
+  // Portfolio: starts from defaults, backend overwrites on load
+  // Backend KV is the SINGLE SOURCE OF TRUTH for cash — localStorage is NOT used for portfolio
   const [portfolio,setPortfolio]= useState({capital:100000,cash:100000,peakCapital:100000,trades:0,wins:0});
+  const [portfolioSynced, setPortfolioSynced] = useState(false); // gate: don't trade until backend loads
   const [engine,   setEngine]   = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("vega-engine") || "null");
-      // ALWAYS start stopped — user must explicitly click START
-      if (saved) return { ...saved, running: false };
+      // Preserve running state across refresh so engine continues
+      if (saved) return { ...saved, running: saved.running || false };
     } catch {}
     return {
       running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
@@ -221,8 +223,8 @@ export default function VegaApp({ user, onLogout }) {
     };
   });
   // ── persist state across refresh ──────────────────────────
-  // Engine settings (not running state) and trade log only — NOT portfolio or positions
-  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify({...engine, running: false})); }, [engine]);
+  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify(engine)); }, [engine]);
+  useEffect(() => { localStorage.setItem("vega-positions", JSON.stringify(positions)); }, [positions]);
   useEffect(() => { localStorage.setItem("vega-tradeLog", JSON.stringify(tradeLog)); }, [tradeLog]);
 
   const [tab,      setTab]      = useState("engine");
@@ -346,7 +348,7 @@ export default function VegaApp({ user, onLogout }) {
         });
         setIndices(indicesData);
 
-        // Load portfolio from backend — backend KV is the SINGLE SOURCE OF TRUTH
+        // Load portfolio from backend — backend KV is the SINGLE SOURCE OF TRUTH for cash
         try {
           const port = await api.getPortfolio();
           const backendCash = typeof port.cash === "number" ? port.cash : 100000;
@@ -358,8 +360,10 @@ export default function VegaApp({ user, onLogout }) {
             trades: port.totalTradeCount || 0,
             wins: port.winCount || 0,
           });
+          setPortfolioSynced(true); // Allow engine to trade now
         } catch (e) {
           console.warn("Failed to load portfolio:", e);
+          setPortfolioSynced(true); // Still ungate so engine works offline
         }
 
       } catch (e) {
@@ -536,8 +540,9 @@ export default function VegaApp({ user, onLogout }) {
   useEffect(()=>{
     clearInterval(timerRef.current);
     if(!engine.running) { engineStartedRef.current=false; return; }
-    // Don't start scanning until market data is loaded
+    // Don't start scanning until market data AND portfolio are loaded from backend
     if(marketLoading || Object.keys(market).length===0) return;
+    if(!portfolioSynced) return; // Wait for backend cash to load before trading
     if(!engineStartedRef.current) {
       addLog("⚡ Auto-trade engine STARTED","info");
       engineStartedRef.current=true;
@@ -545,7 +550,7 @@ export default function VegaApp({ user, onLogout }) {
     runScan();
     timerRef.current=setInterval(runScan,engine.scanInterval*1000);
     return ()=>clearInterval(timerRef.current);
-  },[engine.running,engine.scanInterval,runScan,marketLoading,Object.keys(market).length]);
+  },[engine.running,engine.scanInterval,runScan,marketLoading,Object.keys(market).length,portfolioSynced]);
 
   // ── AI ────────────────────────────────────────────────────────
   async function sendAI(msg){
