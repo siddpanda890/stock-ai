@@ -61,6 +61,26 @@ async function savePortfolio(kv: KVNamespace, userId: string, portfolio: Portfol
   await kv.put(`portfolio:${userId}`, JSON.stringify(portfolio));
 }
 
+// ─── Trade Rate Limiter ─────────────────────────────
+// Prevents rapid-fire automated trades (max 1 trade per symbol per 30s)
+async function checkTradeRateLimit(
+  kv: KVNamespace,
+  userId: string,
+  symbol: string,
+  type: "BUY" | "SELL"
+): Promise<{ allowed: boolean; retryAfter?: number }> {
+  const key = `ratelimit:trade:${userId}:${symbol}:${type}`;
+  const last = await kv.get(key);
+  if (last) {
+    const elapsed = Date.now() - parseInt(last);
+    if (elapsed < 30000) { // 30 second cooldown
+      return { allowed: false, retryAfter: Math.ceil((30000 - elapsed) / 1000) };
+    }
+  }
+  await kv.put(key, Date.now().toString(), { expirationTtl: 60 }); // auto-expire in 60s
+  return { allowed: true };
+}
+
 // Execute a buy trade
 export async function executeBuy(
   kv: KVNamespace,
@@ -70,6 +90,12 @@ export async function executeBuy(
   price: number,
   notes?: string
 ): Promise<{ success: true; trade: Trade; portfolio: Portfolio } | { success: false; error: string }> {
+  // Rate limit check
+  const rateCheck = await checkTradeRateLimit(kv, userId, symbol, "BUY");
+  if (!rateCheck.allowed) {
+    return { success: false, error: `Rate limited: wait ${rateCheck.retryAfter}s before trading ${symbol} again` };
+  }
+
   const portfolio = await getPortfolio(kv, userId);
   const total = quantity * price;
 
@@ -128,8 +154,15 @@ export async function executeSell(
   price: number,
   notes?: string
 ): Promise<{ success: true; trade: Trade; portfolio: Portfolio; realizedPnl: number } | { success: false; error: string }> {
-  const portfolio = await getPortfolio(kv, userId);
   const sym = symbol.toUpperCase();
+
+  // Rate limit check
+  const rateCheck = await checkTradeRateLimit(kv, userId, sym, "SELL");
+  if (!rateCheck.allowed) {
+    return { success: false, error: `Rate limited: wait ${rateCheck.retryAfter}s before selling ${sym} again` };
+  }
+
+  const portfolio = await getPortfolio(kv, userId);
 
   const holdingIdx = portfolio.holdings.findIndex(h => h.symbol === sym);
   if (holdingIdx < 0) {
