@@ -197,34 +197,37 @@ export default function VegaApp({ user, onLogout }) {
   const [marketLoading, setMarketLoading] = useState(true);
   const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
   const [indices,  setIndices]  = useState([]);
-  // Positions persisted to localStorage for continuity across refresh
-  const [positions,setPositions]= useState(() => {
-    try { return JSON.parse(localStorage.getItem("vega-positions") || "[]"); } catch { return []; }
-  });
+  // ── Positions: session-only (NOT in localStorage) ──
+  // On page refresh, positions are lost. This is BY DESIGN:
+  // Backend KV tracks holdings (permanent). Frontend positions are just the live
+  // intra-session tracker for SL/target exits. Cash in backend already reflects
+  // any buys, so no "phantom cash leak" is possible.
+  const [positions,setPositions]= useState([]);
   const [orders,   setOrders]   = useState([]);
   const [tradeLog, setTradeLog] = useState(() => {
     try { return JSON.parse(localStorage.getItem("vega-tradeLog") || "[]"); } catch { return []; }
   });
   const [signals,  setSignals]  = useState([]);
   const [execLog,  setExecLog]  = useState([]);
-  // Portfolio: starts from defaults, backend overwrites on load
-  // Backend KV is the SINGLE SOURCE OF TRUTH for cash — localStorage is NOT used for portfolio
+  // Portfolio: backend KV is the SINGLE SOURCE OF TRUTH — never from localStorage
   const [portfolio,setPortfolio]= useState({capital:100000,cash:100000,peakCapital:100000,trades:0,wins:0});
-  const [portfolioSynced, setPortfolioSynced] = useState(false); // gate: don't trade until backend loads
+  const [portfolioSynced, setPortfolioSynced] = useState(false);
   const [engine,   setEngine]   = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("vega-engine") || "null");
-      // Preserve running state across refresh so engine continues
-      if (saved) return { ...saved, running: saved.running || false };
+      // Restore engine SETTINGS but always start STOPPED
+      // User must explicitly click START — prevents phantom auto-trading on refresh
+      if (saved) return { ...saved, running: false };
     } catch {}
     return {
       running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
       riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
     };
   });
-  // ── persist state across refresh ──────────────────────────
-  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify(engine)); }, [engine]);
-  useEffect(() => { localStorage.setItem("vega-positions", JSON.stringify(positions)); }, [positions]);
+  // ── persist ONLY engine settings and trade log ──────────────────────────
+  // Engine running=false is always saved (never persist running:true)
+  // Positions and portfolio are NOT persisted — backend is truth
+  useEffect(() => { localStorage.setItem("vega-engine", JSON.stringify({...engine, running: false})); }, [engine]);
   useEffect(() => { localStorage.setItem("vega-tradeLog", JSON.stringify(tradeLog)); }, [tradeLog]);
 
   const [tab,      setTab]      = useState("engine");
@@ -363,7 +366,8 @@ export default function VegaApp({ user, onLogout }) {
           setPortfolioSynced(true); // Allow engine to trade now
         } catch (e) {
           console.warn("Failed to load portfolio:", e);
-          setPortfolioSynced(true); // Still ungate so engine works offline
+          // Do NOT ungate engine if backend failed — trading with fake 100k is dangerous
+          // User can still manually start engine, but auto-start won't happen
         }
 
       } catch (e) {
@@ -438,43 +442,66 @@ export default function VegaApp({ user, onLogout }) {
   const currentValue = portfolio.cash + invested + dayPnL;
 
   useEffect(()=>{
-    // Only update peakCapital (a stored value), not the derived values
-    setPortfolio(prev=>({...prev,peakCapital:Math.max(prev.peakCapital,prev.cash+invested+dayPnL)}));
-  },[positions, dayPnL, invested]);
+    // Only update peakCapital when currentValue actually exceeds previous peak
+    if(currentValue > portfolio.peakCapital){
+      setPortfolio(prev=>({...prev,peakCapital:currentValue}));
+    }
+  },[currentValue]);
 
   // ── execution helpers ─────────────────────────────────────────
   const addLog=useCallback((msg,type="info")=>{
     setExecLog(prev=>[{id:Date.now()+Math.random(),msg,type,ts:fmt.t()},...prev.slice(0,299)]);
   },[]);
 
+  // Re-sync portfolio from backend after trades to keep cash accurate
+  const syncPortfolioFromBackend=useCallback(()=>{
+    api.getPortfolio().then(port=>{
+      const backendCash = typeof port.cash === "number" ? port.cash : 100000;
+      const portfolioVal = typeof port.portfolioValue === "number" ? port.portfolioValue : backendCash;
+      setPortfolio({
+        cash: backendCash,
+        capital: portfolioVal,
+        peakCapital: Math.max(portfolioVal, 100000),
+        trades: port.totalTradeCount || 0,
+        wins: port.winCount || 0,
+      });
+    }).catch(()=>{});
+  },[]);
+
   const closePos=useCallback((p,exitPrice,reason)=>{
     const pnl=(exitPrice-p.entryPrice)*p.qty*(p.side==="LONG"?1:-1);
     setPositions(prev=>prev.filter(x=>x.id!==p.id));
     setTradeLog(prev=>[{id:Date.now(),sym:p.sym,side:p.side,qty:p.qty,entryPrice:p.entryPrice,exitPrice,pnl,reason,ts:fmt.t()},...prev.slice(0,299)]);
-    // Proper accounting: on sell we receive exitPrice*qty back into cash (cost was deducted on entry)
-    // P&L is tracked separately — do NOT add pnl to cash again
+    // Optimistic cash update for immediate UI feedback
     setPortfolio(prev=>({...prev,cash:prev.cash+exitPrice*p.qty,trades:prev.trades+1,wins:prev.wins+(pnl>0?1:0)}));
     const icon=reason==="SL_HIT"?"🛑":reason==="TARGET"?"🎯":"📤";
     addLog(`${icon} EXIT ${p.sym} @ ${fmt.inr(exitPrice)} | P&L:${pnl>=0?"+":""}${fmt.inr(pnl)} [${reason}]`,pnl>=0?"profit":"loss");
 
-    // Sync to backend
-    api.sell(p.sym, p.qty, exitPrice, `${reason} | ${p.side}`).catch(e => {
-      addLog(`⚠️ Backend sync: ${e.message}`, "info");
-    });
-  },[settings,addLog]);
+    // Sync to backend THEN re-read backend cash to correct any drift
+    api.sell(p.sym, p.qty, exitPrice, `${reason} | ${p.side}`)
+      .then(()=>syncPortfolioFromBackend())
+      .catch(e => {
+        addLog(`⚠️ Backend sell failed: ${e.message}`, "loss");
+        syncPortfolioFromBackend(); // Re-sync even on failure to correct frontend
+      });
+  },[addLog,syncPortfolioFromBackend]);
 
   const openPos=useCallback((sym,side,entry,sl,target,strategy,qty,reason)=>{
     const pos={id:Date.now()+Math.random(),sym,side,qty,entryPrice:entry,sl,target,strategy,ltp:entry,pnl:0,entryTs:Date.now(),entryTime:fmt.t()};
     setPositions(prev=>[...prev,pos]);
+    // Optimistic cash deduction for immediate UI feedback
     setPortfolio(prev=>({...prev,cash:prev.cash-entry*qty}));
     setOrders(prev=>[{id:`${settings.paperMode?"P":"L"}-${Date.now()}`,sym,side:side==="LONG"?"BUY":"SELL",qty,price:entry.toFixed(2),status:"FILLED",strategy,ts:fmt.t()},...prev.slice(0,299)]);
     addLog(`📈 ENTER ${side} ${sym} @ ${fmt.inr(entry)} | Qty:${qty} | SL:${fmt.inr(sl)} | T:${fmt.inr(target)} [${strategy}] ${reason}`,"buy");
 
-    // Sync to backend
-    api.buy(sym, qty, entry, `${strategy} | ${reason}`).catch(e => {
-      addLog(`⚠️ Backend sync: ${e.message}`, "info");
-    });
-  },[settings,addLog]);
+    // Sync to backend THEN re-read backend cash to correct any drift
+    api.buy(sym, qty, entry, `${strategy} | ${reason}`)
+      .then(()=>syncPortfolioFromBackend())
+      .catch(e => {
+        addLog(`⚠️ Backend buy failed: ${e.message}`, "loss");
+        syncPortfolioFromBackend(); // Re-sync to correct frontend cash
+      });
+  },[settings,addLog,syncPortfolioFromBackend]);
 
   // ── SCAN ENGINE ───────────────────────────────────────────────
   const runScan=useCallback(()=>{
@@ -513,6 +540,8 @@ export default function VegaApp({ user, onLogout }) {
     const alive=pos.filter(p=>!closedIds.has(p.id));
     if(alive.length>=eng.maxPositions) return;
 
+    // Track cash spent THIS scan cycle to prevent over-allocation
+    let availCash=port.cash;
     const liveSigs=[];
     Object.keys(mkt).forEach(sym=>{
       const st=mkt[sym]; if(!st) return;
@@ -524,9 +553,11 @@ export default function VegaApp({ user, onLogout }) {
         if((sig.action==="BUY"||(sig.action==="SELL"&&eng.allowShort))&&sig.strength>=eng.minStrength){
           if(alive.length>=eng.maxPositions) return;
           const side=sig.action==="BUY"?"LONG":"SHORT";
-          const qty=posSize(port.cash,eng.riskPct,sig.entry,sig.sl);
-          if(sig.entry*qty>port.cash*.9||qty<1) return;
-          alive.push({sym,id:Date.now(),side}); // optimistic push to prevent double-entry in same scan
+          const qty=posSize(availCash,eng.riskPct,sig.entry,sig.sl);
+          const cost=sig.entry*qty;
+          if(cost>availCash*.9||qty<1) return;
+          availCash-=cost; // Deduct from local tracker so next position sees reduced cash
+          alive.push({sym,id:Date.now(),side});
           openPos(sym,side,sig.entry,sig.sl,sig.target,id,qty,sig.reason);
         }
       });
@@ -558,8 +589,9 @@ export default function VegaApp({ user, onLogout }) {
     setAiMsgs(prev=>[...prev,{role:"user",content:msg,ts:fmt.t()}]);
     setAiInput(""); setAiLoading(true);
     const port=portRef.current, pos=posRef.current;
-    const contextMsg = `[VEGA Context] Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(posDayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
-Positions: ${pos.map(p=>`${p.sym} ${p.side} ${p.qty}@₹${p.entryPrice.toFixed(0)} SL:₹${p.sl?.toFixed(0)} P&L:${fmt.inr(p.pnl)}`).join(" | ")||"none"}
+    const aiDayPnL=pos.reduce((s,p)=>s+(p.pnl||0),0);
+    const contextMsg = `[VEGA Context] Portfolio: Cash ₹${fmt.num(Math.round(port.cash))} | P&L ₹${fmt.inr(aiDayPnL)} | Win rate: ${port.trades?Math.round(port.wins/port.trades*100):0}%
+Positions: ${pos.map(p=>`${p.sym} ${p.side} ${p.qty}@₹${p.entryPrice.toFixed(0)} SL:₹${p.sl?.toFixed(0)} P&L:${fmt.inr(p.pnl||0)}`).join(" | ")||"none"}
 Signals: ${signals.slice(0,5).map(s=>`${s.sym} ${s.action}(${(s.strength*100).toFixed(0)}%) via ${s.strategy}`).join(" | ")||"none"}
 User asks: ${msg}`;
     try{
