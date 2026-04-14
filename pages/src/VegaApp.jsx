@@ -48,6 +48,56 @@ const SMETA = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+//  MARKET HOURS (NSE/BSE: Mon-Fri 9:15 AM – 3:30 PM IST)
+// ═══════════════════════════════════════════════════════════════
+// NSE public holidays for 2026 (update annually)
+const NSE_HOLIDAYS_2026 = new Set([
+  "2026-01-26","2026-02-17","2026-03-10","2026-03-30","2026-03-31",
+  "2026-04-02","2026-04-14","2026-04-17","2026-05-01","2026-06-26",
+  "2026-07-07","2026-08-15","2026-08-25","2026-10-02","2026-10-20",
+  "2026-10-23","2026-11-04","2026-11-09","2026-12-25",
+]);
+
+function getMarketStatus() {
+  const now = new Date();
+  // Convert to IST (UTC+5:30)
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const day = ist.getDay(); // 0=Sun, 6=Sat
+  const hh = ist.getHours();
+  const mm = ist.getMinutes();
+  const timeMin = hh * 60 + mm; // minutes since midnight IST
+  const dateStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,"0")}-${String(ist.getDate()).padStart(2,"0")}`;
+
+  const OPEN = 9 * 60 + 15;   // 9:15 AM = 555
+  const CLOSE = 15 * 60 + 30; // 3:30 PM = 930
+
+  const isWeekday = day >= 1 && day <= 5;
+  const isHoliday = NSE_HOLIDAYS_2026.has(dateStr);
+  const inHours = timeMin >= OPEN && timeMin < CLOSE;
+
+  const isOpen = isWeekday && !isHoliday && inHours;
+
+  // Time until next open/close
+  let nextEvent = "";
+  let minutesUntil = 0;
+  if (isOpen) {
+    minutesUntil = CLOSE - timeMin;
+    const h = Math.floor(minutesUntil / 60);
+    const m = minutesUntil % 60;
+    nextEvent = `closes in ${h}h ${m}m`;
+  } else if (isWeekday && !isHoliday && timeMin < OPEN) {
+    minutesUntil = OPEN - timeMin;
+    const h = Math.floor(minutesUntil / 60);
+    const m = minutesUntil % 60;
+    nextEvent = `opens in ${h}h ${m}m`;
+  } else {
+    nextEvent = "closed";
+  }
+
+  return { isOpen, isWeekday, isHoliday, inHours, nextEvent, dateStr, timeMin, OPEN, CLOSE };
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  TECHNICAL INDICATORS
 // ═══════════════════════════════════════════════════════════════
 const TA = {
@@ -220,7 +270,7 @@ export default function VegaApp({ user, onLogout }) {
       if (saved) return { ...saved, running: false };
     } catch {}
     return {
-      running:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
+      running:false, autoSchedule:false, strategies:{momentum:true,supertrend:true,mean_rev:true,breakout:false,macd:false},
       riskPct:1.5, atrMult:2.0, maxPositions:5, minStrength:.70, dailyLossLimit:3.0, scanInterval:5, allowShort:false,
     };
   });
@@ -583,6 +633,35 @@ export default function VegaApp({ user, onLogout }) {
     return ()=>clearInterval(timerRef.current);
   },[engine.running,engine.scanInterval,runScan,marketLoading,Object.keys(market).length,portfolioSynced]);
 
+  // ── Auto start/stop based on NSE market hours ──────────────
+  const autoScheduleRef = useRef(false);
+  useEffect(() => {
+    if (!engine.autoSchedule) { autoScheduleRef.current = false; return; }
+    function checkMarketHours() {
+      const { isOpen } = getMarketStatus();
+      if (isOpen && !engine.running) {
+        // Auto-start only if we haven't manually stopped this session
+        setEngine(e => ({ ...e, running: true }));
+        addLog("🕘 Auto-START: market hours active (9:15–15:30 IST)", "info");
+      } else if (!isOpen && engine.running && engine.autoSchedule) {
+        // Auto-stop when market closes
+        setEngine(e => ({ ...e, running: false }));
+        addLog("🕞 Auto-STOP: market hours ended", "info");
+      }
+    }
+    // Check immediately and then every 30 seconds
+    checkMarketHours();
+    const id = setInterval(checkMarketHours, 30000);
+    return () => clearInterval(id);
+  }, [engine.autoSchedule, engine.running, addLog]);
+
+  // ── Market status for display ──────────────────────────────
+  const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
+  useEffect(() => {
+    const id = setInterval(() => setMarketStatus(getMarketStatus()), 15000);
+    return () => clearInterval(id);
+  }, []);
+
   // ── AI ────────────────────────────────────────────────────────
   async function sendAI(msg){
     if(!msg.trim()) return;
@@ -705,6 +784,19 @@ User asks: ${msg}`;
               <div style={{display:"flex",justifyContent:"space-between"}}><span>Signals found</span><span style={{color:C.a,fontWeight:600}}>{signals.length}</span></div>
               <div style={{display:"flex",justifyContent:"space-between"}}><span>Scan every</span><span style={{color:C.b,fontWeight:600}}>{engine.scanInterval}s</span></div>
               <div style={{display:"flex",justifyContent:"space-between"}}><span>Mode</span><span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>Auto Schedule</span>
+                <div onClick={()=>setEngine(e=>({...e,autoSchedule:!e.autoSchedule}))}
+                  style={{width:34,height:18,borderRadius:9,background:engine.autoSchedule?C.g:C.mu,cursor:"pointer",position:"relative",transition:"background .2s"}}>
+                  <div style={{position:"absolute",top:2,left:engine.autoSchedule?18:2,width:14,height:14,borderRadius:7,background:"#fff",transition:"left .2s"}}/>
+                </div>
+              </div>
+              {engine.autoSchedule && <div style={{background:marketStatus.isOpen?C.g+"15":C.r+"15",border:`1px solid ${marketStatus.isOpen?C.g+"30":C.r+"30"}`,borderRadius:4,padding:"6px 8px",marginTop:4}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:"10px",color:C.mu}}>NSE</span>
+                  <span style={{fontSize:"10px",color:marketStatus.isOpen?C.g:C.r,fontWeight:600}}>{marketStatus.isOpen?"OPEN":"CLOSED"}</span>
+                </div>
+                <div style={{fontSize:"9px",color:C.mu,marginTop:2}}>{marketStatus.nextEvent} • 9:15–15:30 IST</div>
+              </div>}
             </div>
           </div>
 
@@ -1263,6 +1355,30 @@ User asks: ${msg}`;
           </div>
         </div>
         <div style={S.card}>
+          <div style={S.ct}>MARKET HOURS SCHEDULE</div>
+          <div onClick={()=>setEngine(e=>({...e,autoSchedule:!e.autoSchedule}))}
+            style={{border:`1px solid ${engine.autoSchedule?C.g:C.b}`,borderRadius:3,padding:"12px",cursor:"pointer",background:engine.autoSchedule?C.g+"11":C.bg3,marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{color:engine.autoSchedule?C.g:C.tx,fontWeight:700,fontSize:"13px"}}>{engine.autoSchedule?"🕘 AUTO SCHEDULE ON":"🕘 AUTO SCHEDULE OFF"}</div>
+                <div style={{color:C.mu,fontSize:"9px",marginTop:3}}>Auto start at 9:15 AM, stop at 3:30 PM IST</div>
+              </div>
+              <div style={{width:40,height:22,borderRadius:11,background:engine.autoSchedule?C.g:C.mu,position:"relative",transition:"background .2s",flexShrink:0}}>
+                <div style={{position:"absolute",top:3,left:engine.autoSchedule?21:3,width:16,height:16,borderRadius:8,background:"#fff",transition:"left .2s"}}/>
+              </div>
+            </div>
+          </div>
+          <div style={{fontSize:"10px",color:C.mu,lineHeight:1.9}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>Market</span><span style={{color:marketStatus.isOpen?C.g:C.r,fontWeight:600}}>{marketStatus.isOpen?"OPEN":"CLOSED"}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>Session</span><span>Mon–Fri, 9:15 AM – 3:30 PM IST</span></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>Status</span><span style={{color:C.b}}>{marketStatus.nextEvent}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>Holiday check</span><span>NSE 2026 calendar</span></div>
+          </div>
+          <div style={{marginTop:8,padding:"6px 8px",background:C.bg3,borderRadius:3,fontSize:"9px",color:C.mu,lineHeight:1.6}}>
+            When enabled, the engine automatically starts scanning at market open and stops at close. Includes NSE holiday detection. You can still manually stop the engine during market hours.
+          </div>
+        </div>
+        <div style={S.card}>
           <div style={S.ct}>GROWW API ENDPOINTS</div>
           {[["POST","/v1/order/create","Place order"],["GET","/v1/order/detail/{id}","Order status"],["POST","/v1/order/cancel","Cancel order"],["POST","/v1/smart-order/create","OCO/GTT orders"],["GET","/v1/live-data/ltp","Live price"],["GET","/v1/live-data/ohlc","OHLC data"],["GET","/v1/historical-data","Candle history"],["GET","/v1/portfolio/positions","Positions"],["GET","/v1/portfolio/holdings","Holdings"],["GET","/v1/user/funds","Fund balance"]].map(([m,ep,d])=>(
             <div key={ep} style={{display:"flex",gap:5,padding:"4px 0",borderBottom:`1px solid ${C.bg3}`,fontSize:"9px",alignItems:"center"}}>
@@ -1365,6 +1481,7 @@ User asks: ${msg}`;
           <span style={{color:C.mu,fontSize:"12px",fontFamily:FONT_MONO}}>{new Date().toLocaleTimeString("en-IN")}</span>
           <span style={S.bdg(settings.paperMode?C.a:C.r)}>{settings.paperMode?"PAPER":"LIVE"}</span>
           <span style={S.bdg(engine.running?C.g:C.mu)}>{engine.running?"RUNNING":"IDLE"}</span>
+          {engine.autoSchedule && <span style={S.bdg(marketStatus.isOpen?C.g:C.b)} title="Auto schedule active">⏰</span>}
           <span style={{color:C.mu,fontSize:"11px",fontFamily:FONT_UI}}>{positions.length} pos · {signals.length} sig</span>
           <button onClick={toggleTheme}
             style={{background:C.bg3,border:`1px solid ${C.bd}`,borderRadius:6,padding:"6px 12px",cursor:"pointer",fontSize:"14px",color:C.tx,lineHeight:1,transition:"all .2s",display:"flex",alignItems:"center",gap:6}}
