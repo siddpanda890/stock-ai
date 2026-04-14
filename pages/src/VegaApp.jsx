@@ -51,12 +51,27 @@ const SMETA = {
 //  MARKET HOURS (NSE/BSE: Mon-Fri 9:15 AM – 3:30 PM IST)
 // ═══════════════════════════════════════════════════════════════
 // NSE public holidays for 2026 (update annually)
-const NSE_HOLIDAYS_2026 = new Set([
-  "2026-01-26","2026-02-17","2026-03-10","2026-03-30","2026-03-31",
-  "2026-04-02","2026-04-14","2026-04-17","2026-05-01","2026-06-26",
-  "2026-07-07","2026-08-15","2026-08-25","2026-10-02","2026-10-20",
-  "2026-10-23","2026-11-04","2026-11-09","2026-12-25",
-]);
+const NSE_HOLIDAYS_2026 = {
+  "2026-01-26": "Republic Day",
+  "2026-02-17": "Mahashivratri",
+  "2026-03-10": "Ramadan",
+  "2026-03-30": "Holi",
+  "2026-03-31": "Id-Ul-Fitr",
+  "2026-04-02": "Ram Navami",
+  "2026-04-14": "Dr. Ambedkar Jayanti",
+  "2026-04-17": "Good Friday",
+  "2026-05-01": "Maharashtra Day",
+  "2026-06-26": "Bakri Id",
+  "2026-07-07": "Muharram",
+  "2026-08-15": "Independence Day",
+  "2026-08-25": "Janmashtami",
+  "2026-10-02": "Gandhi Jayanti",
+  "2026-10-20": "Dussehra",
+  "2026-10-23": "Diwali (Lakshmi Puja)",
+  "2026-11-04": "Diwali (Balipratipada)",
+  "2026-11-09": "Guru Nanak Jayanti",
+  "2026-12-25": "Christmas",
+};
 
 function getMarketStatus() {
   const now = new Date();
@@ -72,7 +87,8 @@ function getMarketStatus() {
   const CLOSE = 15 * 60 + 30; // 3:30 PM = 930
 
   const isWeekday = day >= 1 && day <= 5;
-  const isHoliday = NSE_HOLIDAYS_2026.has(dateStr);
+  const holidayName = NSE_HOLIDAYS_2026[dateStr] || null;
+  const isHoliday = !!holidayName;
   const inHours = timeMin >= OPEN && timeMin < CLOSE;
 
   const isOpen = isWeekday && !isHoliday && inHours;
@@ -85,16 +101,20 @@ function getMarketStatus() {
     const h = Math.floor(minutesUntil / 60);
     const m = minutesUntil % 60;
     nextEvent = `closes in ${h}h ${m}m`;
-  } else if (isWeekday && !isHoliday && timeMin < OPEN) {
+  } else if (isHoliday) {
+    nextEvent = `Holiday — ${holidayName}`;
+  } else if (!isWeekday) {
+    nextEvent = day === 6 ? "Weekend — Saturday" : "Weekend — Sunday";
+  } else if (timeMin < OPEN) {
     minutesUntil = OPEN - timeMin;
     const h = Math.floor(minutesUntil / 60);
     const m = minutesUntil % 60;
     nextEvent = `opens in ${h}h ${m}m`;
   } else {
-    nextEvent = "closed";
+    nextEvent = "closed for today";
   }
 
-  return { isOpen, isWeekday, isHoliday, inHours, nextEvent, dateStr, timeMin, OPEN, CLOSE };
+  return { isOpen, isWeekday, isHoliday, holidayName, inHours, nextEvent, dateStr, timeMin, OPEN, CLOSE };
 }
 
 // ═══════════════════════════════════════════════════════════════
