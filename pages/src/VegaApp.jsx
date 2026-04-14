@@ -634,26 +634,43 @@ export default function VegaApp({ user, onLogout }) {
   },[engine.running,engine.scanInterval,runScan,marketLoading,Object.keys(market).length,portfolioSynced]);
 
   // ── Auto start/stop based on NSE market hours ──────────────
-  const autoScheduleRef = useRef(false);
+  // Use refs so the interval callback always sees fresh state without re-creating
+  const engineRunningRef = useRef(engine.running);
+  engineRunningRef.current = engine.running;
+  const wasOpenRef = useRef(null); // tracks previous market state to detect transitions
   useEffect(() => {
-    if (!engine.autoSchedule) { autoScheduleRef.current = false; return; }
+    if (!engine.autoSchedule) { wasOpenRef.current = null; return; }
     function checkMarketHours() {
       const { isOpen } = getMarketStatus();
-      if (isOpen && !engine.running) {
-        // Auto-start only if we haven't manually stopped this session
+      const wasOpen = wasOpenRef.current;
+      const running = engineRunningRef.current;
+      wasOpenRef.current = isOpen;
+
+      // First check — just record state, don't act (avoids flicker on page load)
+      if (wasOpen === null) {
+        // On first load with autoSchedule ON: start if market is open
+        if (isOpen && !running) {
+          setEngine(e => ({ ...e, running: true }));
+          addLog("🕘 Auto-START: market is open (9:15–15:30 IST)", "info");
+        }
+        return;
+      }
+
+      // Transition: market just opened → auto-start
+      if (isOpen && !wasOpen && !running) {
         setEngine(e => ({ ...e, running: true }));
-        addLog("🕘 Auto-START: market hours active (9:15–15:30 IST)", "info");
-      } else if (!isOpen && engine.running && engine.autoSchedule) {
-        // Auto-stop when market closes
+        addLog("🕘 Auto-START: market just opened", "info");
+      }
+      // Transition: market just closed → auto-stop
+      if (!isOpen && wasOpen && running) {
         setEngine(e => ({ ...e, running: false }));
-        addLog("🕞 Auto-STOP: market hours ended", "info");
+        addLog("🕞 Auto-STOP: market just closed", "info");
       }
     }
-    // Check immediately and then every 30 seconds
     checkMarketHours();
     const id = setInterval(checkMarketHours, 30000);
     return () => clearInterval(id);
-  }, [engine.autoSchedule, engine.running, addLog]);
+  }, [engine.autoSchedule, addLog]); // engine.running intentionally excluded — read via ref
 
   // ── Market status for display ──────────────────────────────
   const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
