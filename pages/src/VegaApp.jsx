@@ -1534,12 +1534,12 @@ User asks: ${msg}`;
           </div>
         ) : (
           <>
-            {tab==="engine"    && EngineTab()}
-            {tab==="positions" && PositionsTab()}
-            {tab==="scanner"   && ScannerTab()}
-            {tab==="ai"        && AITab()}
-            {tab==="orders"    && OrdersTab()}
-            {tab==="settings"  && SettingsTab()}
+            {tab==="engine"    && <EngineTab/>}
+            {tab==="positions" && <PositionsTab/>}
+            {tab==="scanner"   && <ScannerTab/>}
+            {tab==="ai"        && <AITab/>}
+            {tab==="orders"    && <OrdersTab/>}
+            {tab==="settings"  && <SettingsTab/>}
           </>
         )}
       </div>
