@@ -71,6 +71,31 @@ import {
   type SignalLog,
   type TradeLog,
 } from "./trade-logger";
+import {
+  analysisAccuracySchema,
+  analyzeSchema,
+  alertSchema,
+  backtestSchema,
+  chatHistorySchema,
+  chatSchema,
+  closeTradeSchema,
+  dynamicThresholdSchema,
+  loginSchema,
+  orderSchema,
+  orderStatusSchema,
+  portfolioTradeSchema,
+  readValidatedJson,
+  registerSchema,
+  resetPortfolioSchema,
+  riskCheckSchema,
+  riskSizeSchema,
+  scanSchema,
+  signalSchema,
+  tradeLogSchema,
+  userSettingsSchema,
+  watchlistSchema,
+  watchlistSymbolSchema,
+} from "./validation";
 
 type Bindings = {
   VERTEX_PROJECT_ID: string;
@@ -145,7 +170,9 @@ app.get("/api/models", (c) => {
 
 app.post("/api/auth/register", async (c) => {
   try {
-    const { username, email, password } = await c.req.json();
+    const parsed = await readValidatedJson(c, registerSchema);
+    if (!parsed.success) return parsed.response;
+    const { username, email, password } = parsed.data;
     const result = await registerUser(c.env.STOCK_AI_KV, username, email, password, c.env.JWT_SECRET);
     if ("error" in result) return c.json({ success: false, error: result.error }, 400);
     return c.json({ success: true, data: result });
@@ -156,7 +183,9 @@ app.post("/api/auth/register", async (c) => {
 
 app.post("/api/auth/login", async (c) => {
   try {
-    const { username, password } = await c.req.json();
+    const parsed = await readValidatedJson(c, loginSchema);
+    if (!parsed.success) return parsed.response;
+    const { username, password } = parsed.data;
     const result = await loginUser(c.env.STOCK_AI_KV, username, password, c.env.JWT_SECRET);
     if ("error" in result) return c.json({ success: false, error: result.error }, 401);
     return c.json({ success: true, data: result });
@@ -252,9 +281,9 @@ app.get("/api/news/:symbol", async (c) => {
 
 app.post("/api/watchlist", async (c) => {
   try {
-    const body = await c.req.json<{ symbols: string[] }>();
-    const symbols = body.symbols?.map(s => s.toUpperCase()) || [];
-    if (!symbols.length) return c.json({ success: false, error: "Symbols required" }, 400);
+    const parsed = await readValidatedJson(c, watchlistSchema);
+    if (!parsed.success) return parsed.response;
+    const symbols = parsed.data.symbols.map((s) => s.toUpperCase());
     const quotes = await Promise.allSettled(symbols.map(s => getQuote(s)));
     const data = quotes.filter((q): q is PromiseFulfilledResult<any> => q.status === "fulfilled").map(q => q.value);
     return c.json({ success: true, data });
@@ -269,10 +298,10 @@ app.post("/api/watchlist", async (c) => {
 
 app.post("/api/analyze", async (c) => {
   try {
-    const body = await c.req.json<{ symbol: string; model?: ModelKey }>();
-    const symbol = body.symbol?.toUpperCase();
-    if (!symbol) return c.json({ success: false, error: "Symbol required" }, 400);
-    const model = body.model || "sonnet-4.6";
+    const parsed = await readValidatedJson(c, analyzeSchema);
+    if (!parsed.success) return parsed.response;
+    const symbol = parsed.data.symbol.toUpperCase();
+    const model = (parsed.data.model || "sonnet-4.6") as ModelKey;
 
     const [quote, historicalData] = await Promise.all([
       getQuote(symbol),
@@ -338,9 +367,10 @@ app.post("/api/analyze", async (c) => {
 
 app.post("/api/chat", async (c) => {
   try {
-    const body = await c.req.json<{ messages: ChatMessage[]; symbol?: string; model?: ModelKey }>();
-    if (!body.messages?.length) return c.json({ success: false, error: "Messages required" }, 400);
-    const model = body.model || "sonnet-4.6";
+    const parsed = await readValidatedJson(c, chatSchema);
+    if (!parsed.success) return parsed.response;
+    const body = parsed.data;
+    const model = (body.model || "sonnet-4.6") as ModelKey;
     let stockContext = "";
 
     if (body.symbol) {
@@ -367,9 +397,9 @@ app.post("/api/chat", async (c) => {
 
 app.post("/api/scan", async (c) => {
   try {
-    const body = await c.req.json<{ symbol: string }>();
-    const symbol = body.symbol?.toUpperCase();
-    if (!symbol) return c.json({ success: false, error: "Symbol required" }, 400);
+    const parsed = await readValidatedJson(c, scanSchema);
+    if (!parsed.success) return parsed.response;
+    const symbol = parsed.data.symbol.toUpperCase();
 
     const [quote, historicalData] = await Promise.all([
       getQuote(symbol),
@@ -458,8 +488,9 @@ app.get("/api/regime/:symbol", async (c) => {
 // ─── Backtest (Public) ───────────────────────────────
 app.post("/api/backtest", async (c) => {
   try {
-    const body = await c.req.json<BacktestConfig>();
-    if (!body.symbol) return c.json({ success: false, error: "Symbol required" }, 400);
+    const parsed = await readValidatedJson(c, backtestSchema);
+    if (!parsed.success) return parsed.response;
+    const body = parsed.data;
 
     const historicalData = await getHistoricalData(body.symbol.toUpperCase(), "2y", "1d");
 
@@ -482,11 +513,10 @@ app.post("/api/backtest", async (c) => {
 // ─── Risk Check (Public - Kelly sizing calculator) ───
 app.post("/api/risk/size", async (c) => {
   try {
-    const body = await c.req.json();
+    const parsed = await readValidatedJson(c, riskSizeSchema);
+    if (!parsed.success) return parsed.response;
+    const body = parsed.data;
     const { entryPrice, stopLoss, portfolioValue, winRate, avgWinLoss, maxRiskPerTrade } = body;
-    if (!entryPrice || !stopLoss || !portfolioValue) {
-      return c.json({ success: false, error: "entryPrice, stopLoss, portfolioValue required" }, 400);
-    }
     const result = kellyPositionSize(
       { maxRiskPerTrade: maxRiskPerTrade || 0.02, maxPositions: 5, dailyLossLimit: 0.05, minConfidence: 60, portfolioValue },
       entryPrice, stopLoss, winRate || 0.5, avgWinLoss || 1.5
@@ -505,7 +535,9 @@ app.post("/api/risk/size", async (c) => {
 app.put("/api/user/settings", async (c) => {
   try {
     const userId = c.get("userId");
-    const settings = await c.req.json();
+    const parsed = await readValidatedJson(c, userSettingsSchema);
+    if (!parsed.success) return parsed.response;
+    const settings = parsed.data;
     const updated = await updateUserSettings(c.env.STOCK_AI_KV, userId, settings);
     return c.json({ success: true, data: updated });
   } catch (err: any) {
@@ -583,7 +615,9 @@ app.get("/api/user/portfolio", async (c) => {
 app.post("/api/user/portfolio/reset", async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json().catch(() => ({}));
+    const parsed = await readValidatedJson(c, resetPortfolioSchema);
+    if (!parsed.success) return parsed.response;
+    const body = parsed.data;
     const startingCash = typeof body.cash === "number" && body.cash > 0 ? body.cash : 100000;
     const clean = {
       holdings: [],
@@ -604,8 +638,9 @@ app.post("/api/user/portfolio/reset", async (c) => {
 app.post("/api/user/portfolio/buy", async (c) => {
   try {
     const userId = c.get("userId");
-    const { symbol, quantity, price, notes } = await c.req.json();
-    if (!symbol || !quantity || !price) return c.json({ success: false, error: "symbol, quantity, price required" }, 400);
+    const parsed = await readValidatedJson(c, portfolioTradeSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, quantity, price, notes } = parsed.data;
     const result = await executeBuy(c.env.STOCK_AI_KV, userId, symbol, quantity, price, notes);
     if (!result.success) return c.json(result, 400);
 
@@ -631,8 +666,9 @@ app.post("/api/user/portfolio/buy", async (c) => {
 app.post("/api/user/portfolio/sell", async (c) => {
   try {
     const userId = c.get("userId");
-    const { symbol, quantity, price, notes } = await c.req.json();
-    if (!symbol || !quantity || !price) return c.json({ success: false, error: "symbol, quantity, price required" }, 400);
+    const parsed = await readValidatedJson(c, portfolioTradeSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, quantity, price, notes } = parsed.data;
     const result = await executeSell(c.env.STOCK_AI_KV, userId, symbol, quantity, price, notes);
     if (!result.success) return c.json(result, 400);
 
@@ -671,7 +707,9 @@ app.get("/api/user/watchlist", async (c) => {
 app.post("/api/user/watchlist/add", async (c) => {
   try {
     const userId = c.get("userId");
-    const { symbol } = await c.req.json();
+    const parsed = await readValidatedJson(c, watchlistSymbolSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol } = parsed.data;
     const symbols = await addToWatchlist(c.env.STOCK_AI_KV, userId, symbol);
     return c.json({ success: true, data: symbols });
   } catch (err: any) {
@@ -682,7 +720,9 @@ app.post("/api/user/watchlist/add", async (c) => {
 app.post("/api/user/watchlist/remove", async (c) => {
   try {
     const userId = c.get("userId");
-    const { symbol } = await c.req.json();
+    const parsed = await readValidatedJson(c, watchlistSymbolSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol } = parsed.data;
     const symbols = await removeFromWatchlist(c.env.STOCK_AI_KV, userId, symbol);
     return c.json({ success: true, data: symbols });
   } catch (err: any) {
@@ -704,8 +744,9 @@ app.get("/api/user/alerts", async (c) => {
 app.post("/api/user/alerts", async (c) => {
   try {
     const userId = c.get("userId");
-    const { symbol, type, value, message } = await c.req.json();
-    if (!symbol || !type || value === undefined) return c.json({ success: false, error: "symbol, type, value required" }, 400);
+    const parsed = await readValidatedJson(c, alertSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, type, value, message } = parsed.data;
     const alert = await createAlert(c.env.STOCK_AI_KV, userId, symbol, type, value, message);
     return c.json({ success: true, data: alert });
   } catch (err: any) {
@@ -732,11 +773,9 @@ app.delete("/api/user/alerts/:id", async (c) => {
 app.post("/api/user/signals", async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const { symbol, strategy, signal, confidence, targetPrice, stopLoss, indicators, reasoning, model } = body;
-    if (!symbol || !strategy || !signal) {
-      return c.json({ success: false, error: "symbol, strategy, signal required" }, 400);
-    }
+    const parsed = await readValidatedJson(c, signalSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, strategy, signal, confidence, targetPrice, stopLoss, indicators, reasoning, model } = parsed.data;
     const entry = await logSignal(c.env.STOCK_AI_KV, userId, {
       symbol: symbol.toUpperCase(),
       strategy,
@@ -769,11 +808,9 @@ app.get("/api/user/signals", async (c) => {
 app.post("/api/user/trades/log", async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const { symbol, side, quantity, price, signalId, strategy, notes } = body;
-    if (!symbol || !side || !quantity || !price) {
-      return c.json({ success: false, error: "symbol, side, quantity, price required" }, 400);
-    }
+    const parsed = await readValidatedJson(c, tradeLogSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, side, quantity, price, signalId, strategy, notes } = parsed.data;
     const entry = await logTrade(c.env.STOCK_AI_KV, userId, {
       userId,
       symbol: symbol.toUpperCase(),
@@ -793,10 +830,9 @@ app.post("/api/user/trades/log", async (c) => {
 app.post("/api/user/trades/close", async (c) => {
   try {
     const userId = c.get("userId");
-    const { tradeId, exitPrice, notes } = await c.req.json();
-    if (!tradeId || !exitPrice) {
-      return c.json({ success: false, error: "tradeId, exitPrice required" }, 400);
-    }
+    const parsed = await readValidatedJson(c, closeTradeSchema);
+    if (!parsed.success) return parsed.response;
+    const { tradeId, exitPrice, notes } = parsed.data;
     const closed = await closeTrade(c.env.STOCK_AI_KV, userId, tradeId, exitPrice, notes);
     if (!closed) return c.json({ success: false, error: "Trade not found" }, 404);
     return c.json({ success: true, data: closed });
@@ -863,7 +899,9 @@ app.get("/api/user/risk/daily", async (c) => {
 app.post("/api/user/risk/check", async (c) => {
   try {
     const userId = c.get("userId");
-    const { maxPositions, dailyLossLimit, minConfidence, portfolioValue, signalConfidence } = await c.req.json();
+    const parsed = await readValidatedJson(c, riskCheckSchema);
+    if (!parsed.success) return parsed.response;
+    const { maxPositions, dailyLossLimit, minConfidence, portfolioValue, signalConfidence } = parsed.data;
     const result = await preTradeRiskCheck(c.env.STOCK_AI_KV, userId, {
       maxRiskPerTrade: 0.02,
       maxPositions: maxPositions || 5,
@@ -880,7 +918,9 @@ app.post("/api/user/risk/check", async (c) => {
 app.post("/api/user/risk/dynamic-threshold", async (c) => {
   try {
     const userId = c.get("userId");
-    const { baseThreshold } = await c.req.json();
+    const parsed = await readValidatedJson(c, dynamicThresholdSchema);
+    if (!parsed.success) return parsed.response;
+    const { baseThreshold } = parsed.data;
     // Get recent performance to compute dynamic threshold
     const analytics = await generateAnalytics(c.env.STOCK_AI_KV, userId, "30d");
     const overallPerf = analytics.byStrategy.length > 0
@@ -909,8 +949,9 @@ app.get("/api/user/chat/history", async (c) => {
 app.post("/api/user/chat/history", async (c) => {
   try {
     const userId = c.get("userId");
-    const { role, content, symbol, model } = await c.req.json();
-    if (!role || !content) return c.json({ success: false, error: "role, content required" }, 400);
+    const parsed = await readValidatedJson(c, chatHistorySchema);
+    if (!parsed.success) return parsed.response;
+    const { role, content, symbol, model } = parsed.data;
     const history = await appendChatMessage(c.env.STOCK_AI_KV, userId, { role, content, symbol, model });
     return c.json({ success: true, data: history });
   } catch (err: any) {
@@ -943,11 +984,9 @@ app.get("/api/user/orders", async (c) => {
 app.post("/api/user/orders", async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const { symbol, side, type, quantity, price, triggerPrice, strategy, notes } = body;
-    if (!symbol || !side || !quantity || !price) {
-      return c.json({ success: false, error: "symbol, side, quantity, price required" }, 400);
-    }
+    const parsed = await readValidatedJson(c, orderSchema);
+    if (!parsed.success) return parsed.response;
+    const { symbol, side, type, quantity, price, triggerPrice, strategy, notes } = parsed.data;
     const order = await addOrder(c.env.STOCK_AI_KV, userId, {
       symbol: symbol.toUpperCase(), side, type: type || "MARKET",
       quantity, price, triggerPrice, status: "PENDING",
@@ -963,7 +1002,9 @@ app.put("/api/user/orders/:id", async (c) => {
   try {
     const userId = c.get("userId");
     const orderId = c.req.param("id");
-    const { status } = await c.req.json();
+    const parsed = await readValidatedJson(c, orderStatusSchema);
+    if (!parsed.success) return parsed.response;
+    const { status } = parsed.data;
     const updated = await updateOrderStatus(c.env.STOCK_AI_KV, userId, orderId, status, status === "FILLED" ? new Date().toISOString() : undefined);
     if (!updated) return c.json({ success: false, error: "Order not found" }, 404);
     return c.json({ success: true, data: updated });
@@ -997,10 +1038,9 @@ app.get("/api/user/analyses/accuracy", async (c) => {
 app.post("/api/user/analyses/update-accuracy", async (c) => {
   try {
     const userId = c.get("userId");
-    const { analysisId, currentPrice, daysSinceAnalysis } = await c.req.json();
-    if (!analysisId || !currentPrice) {
-      return c.json({ success: false, error: "analysisId, currentPrice required" }, 400);
-    }
+    const parsed = await readValidatedJson(c, analysisAccuracySchema);
+    if (!parsed.success) return parsed.response;
+    const { analysisId, currentPrice, daysSinceAnalysis } = parsed.data;
     const updated = await updateAnalysisAccuracy(c.env.STOCK_AI_KV, userId, analysisId, currentPrice, daysSinceAnalysis || 1);
     if (!updated) return c.json({ success: false, error: "Analysis not found" }, 404);
     return c.json({ success: true, data: updated });

@@ -43,6 +43,24 @@ export interface PortfolioSummary {
   totalPnlPercent: number;
 }
 
+const DEFAULT_WATCHLIST = [
+  "RELIANCE.NS",
+  "TCS.NS",
+  "HDFCBANK.NS",
+  "INFY.NS",
+  "ICICIBANK.NS",
+  "HINDUNILVR.NS",
+  "ITC.NS",
+  "WIPRO.NS",
+  "AXISBANK.NS",
+  "BAJFINANCE.NS",
+  "TATAMOTORS.NS",
+  "SUNPHARMA.NS",
+  "ADANIENT.NS",
+  "MARUTI.NS",
+  "KOTAKBANK.NS",
+];
+
 // Get portfolio from KV
 export async function getPortfolio(kv: KVNamespace, userId: string): Promise<Portfolio> {
   const data = await kv.get(`portfolio:${userId}`);
@@ -311,7 +329,7 @@ export async function checkAlerts(
 
 export async function getWatchlistSymbols(kv: KVNamespace, userId: string): Promise<string[]> {
   const data = await kv.get(`watchlist:${userId}`);
-  if (!data) return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META"];
+  if (!data) return DEFAULT_WATCHLIST;
   return JSON.parse(data);
 }
 

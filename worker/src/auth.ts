@@ -28,6 +28,24 @@ interface InitialPortfolio {
   winCount: number;
 }
 
+const DEFAULT_WATCHLIST = [
+  "RELIANCE.NS",
+  "TCS.NS",
+  "HDFCBANK.NS",
+  "INFY.NS",
+  "ICICIBANK.NS",
+  "HINDUNILVR.NS",
+  "ITC.NS",
+  "WIPRO.NS",
+  "AXISBANK.NS",
+  "BAJFINANCE.NS",
+  "TATAMOTORS.NS",
+  "SUNPHARMA.NS",
+  "ADANIENT.NS",
+  "MARUTI.NS",
+  "KOTAKBANK.NS",
+];
+
 export interface UserPublic {
   id: string;
   username: string;
@@ -229,7 +247,7 @@ export async function registerUser(
     winCount: 0,
   };
   await kv.put(`portfolio:${id}`, JSON.stringify(initialPortfolio));
-  await kv.put(`watchlist:${id}`, JSON.stringify(["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META"]));
+  await kv.put(`watchlist:${id}`, JSON.stringify(DEFAULT_WATCHLIST));
   await kv.put(`alerts:${id}`, JSON.stringify([]));
 
   const token = await createJWT({ sub: id, username: user.username }, jwtSecret);
