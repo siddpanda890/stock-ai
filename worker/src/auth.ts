@@ -108,6 +108,14 @@ interface JWTPayload {
   exp: number;
 }
 
+function requireJwtSecret(secret: string): string {
+  const normalized = secret?.trim();
+  if (!normalized) {
+    throw new Error("Authentication is not configured");
+  }
+  return normalized;
+}
+
 async function createJWT(
   payload: Omit<JWTPayload, "iat" | "exp">,
   secret: string,
@@ -127,7 +135,7 @@ async function createJWT(
 
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(secret),
+    new TextEncoder().encode(requireJwtSecret(secret)),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
@@ -155,7 +163,7 @@ export async function verifyJWT(
 
     const key = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode(secret),
+      new TextEncoder().encode(requireJwtSecret(secret)),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["verify"]
