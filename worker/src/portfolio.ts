@@ -22,6 +22,7 @@ export interface Portfolio {
   holdings: Holding[];
   trades: Trade[];
   cash: number;
+  initialCapital: number;
   realizedPnl: number;  // running total of all realized P&L
   totalTradeCount: number;
   winCount: number;
@@ -45,11 +46,22 @@ export interface PortfolioSummary {
 // Get portfolio from KV
 export async function getPortfolio(kv: KVNamespace, userId: string): Promise<Portfolio> {
   const data = await kv.get(`portfolio:${userId}`);
-  if (!data) return { holdings: [], trades: [], cash: 100000, realizedPnl: 0, totalTradeCount: 0, winCount: 0 };
+  if (!data) {
+    return {
+      holdings: [],
+      trades: [],
+      cash: 100000,
+      initialCapital: 100000,
+      realizedPnl: 0,
+      totalTradeCount: 0,
+      winCount: 0,
+    };
+  }
   const parsed = JSON.parse(data);
   // Backfill for existing portfolios missing new fields
   return {
     ...parsed,
+    initialCapital: parsed.initialCapital ?? 100000,
     realizedPnl: parsed.realizedPnl ?? 0,
     totalTradeCount: parsed.totalTradeCount ?? parsed.trades?.length ?? 0,
     winCount: parsed.winCount ?? 0,
@@ -136,6 +148,7 @@ export async function executeBuy(
   }
 
   portfolio.cash -= total;
+  portfolio.totalTradeCount += 1;
   portfolio.trades.unshift(trade); // newest first
 
   // Keep trades list manageable (last 500)

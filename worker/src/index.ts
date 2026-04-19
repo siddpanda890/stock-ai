@@ -136,7 +136,7 @@ app.get("/api/models", (c) => {
     }
     return { key: k, provider, tier, description, available: true };
   });
-  return c.json({ success: true, models });
+  return c.json({ success: true, data: models });
 });
 
 // ═══════════════════════════════════════════════════════
@@ -146,7 +146,7 @@ app.get("/api/models", (c) => {
 app.post("/api/auth/register", async (c) => {
   try {
     const { username, email, password } = await c.req.json();
-    const result = await registerUser(c.env.STOCK_AI_KV, username, email, password);
+    const result = await registerUser(c.env.STOCK_AI_KV, username, email, password, c.env.JWT_SECRET);
     if ("error" in result) return c.json({ success: false, error: result.error }, 400);
     return c.json({ success: true, data: result });
   } catch (err: any) {
@@ -157,7 +157,7 @@ app.post("/api/auth/register", async (c) => {
 app.post("/api/auth/login", async (c) => {
   try {
     const { username, password } = await c.req.json();
-    const result = await loginUser(c.env.STOCK_AI_KV, username, password);
+    const result = await loginUser(c.env.STOCK_AI_KV, username, password, c.env.JWT_SECRET);
     if ("error" in result) return c.json({ success: false, error: result.error }, 401);
     return c.json({ success: true, data: result });
   } catch (err: any) {
@@ -563,13 +563,14 @@ app.get("/api/user/portfolio", async (c) => {
         unrealizedPnlPercent: totalInvested > 0 ? (unrealizedPnl / totalInvested) * 100 : 0,
         realizedPnl: portfolio.realizedPnl,   // accumulated from closed trades
         portfolioValue,          // cash + market value (true account value)
+        initialCapital: portfolio.initialCapital,
         totalTradeCount: portfolio.totalTradeCount,
         winCount: portfolio.winCount,
         winRate,
         // Legacy fields for backward compat
         totalPnl: unrealizedPnl + portfolio.realizedPnl,
-        totalPnlPercent: (portfolio.cash + totalValue) > 0
-          ? ((portfolioValue - 100000) / 100000) * 100 : 0, // vs initial capital
+        totalPnlPercent: portfolio.initialCapital > 0
+          ? ((portfolioValue - portfolio.initialCapital) / portfolio.initialCapital) * 100 : 0,
         triggeredAlerts: triggered,
       },
     });
@@ -583,8 +584,16 @@ app.post("/api/user/portfolio/reset", async (c) => {
   try {
     const userId = c.get("userId");
     const body = await c.req.json().catch(() => ({}));
-    const startingCash = body.cash || 100000;
-    const clean = { holdings: [], trades: [], cash: startingCash, realizedPnl: 0, totalTradeCount: 0, winCount: 0 };
+    const startingCash = typeof body.cash === "number" && body.cash > 0 ? body.cash : 100000;
+    const clean = {
+      holdings: [],
+      trades: [],
+      cash: startingCash,
+      initialCapital: startingCash,
+      realizedPnl: 0,
+      totalTradeCount: 0,
+      winCount: 0,
+    };
     await c.env.STOCK_AI_KV.put(`portfolio:${userId}`, JSON.stringify(clean));
     return c.json({ success: true, data: { message: "Portfolio reset", cash: startingCash } });
   } catch (err: any) {

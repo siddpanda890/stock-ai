@@ -18,6 +18,16 @@ export interface UserSettings {
   alertsEnabled: boolean;
 }
 
+interface InitialPortfolio {
+  holdings: [];
+  trades: [];
+  cash: number;
+  initialCapital: number;
+  realizedPnl: number;
+  totalTradeCount: number;
+  winCount: number;
+}
+
 export interface UserPublic {
   id: string;
   username: string;
@@ -168,7 +178,8 @@ export async function registerUser(
   kv: KVNamespace,
   username: string,
   email: string,
-  password: string
+  password: string,
+  jwtSecret: string
 ): Promise<{ user: UserPublic; token: string } | { error: string }> {
   // Validate
   if (!username || username.length < 3)
@@ -208,11 +219,20 @@ export async function registerUser(
   await kv.put(userIdKey(id), username.toLowerCase());
 
   // Initialize empty portfolio and watchlist
-  await kv.put(`portfolio:${id}`, JSON.stringify({ holdings: [], trades: [], cash: 100000 }));
+  const initialPortfolio: InitialPortfolio = {
+    holdings: [],
+    trades: [],
+    cash: 100000,
+    initialCapital: 100000,
+    realizedPnl: 0,
+    totalTradeCount: 0,
+    winCount: 0,
+  };
+  await kv.put(`portfolio:${id}`, JSON.stringify(initialPortfolio));
   await kv.put(`watchlist:${id}`, JSON.stringify(["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META"]));
   await kv.put(`alerts:${id}`, JSON.stringify([]));
 
-  const token = await createJWT({ sub: id, username: user.username }, "stock-ai-jwt-secret-v1-change-in-prod");
+  const token = await createJWT({ sub: id, username: user.username }, jwtSecret);
 
   return { user: toPublic(user), token };
 }
@@ -220,7 +240,8 @@ export async function registerUser(
 export async function loginUser(
   kv: KVNamespace,
   username: string,
-  password: string
+  password: string,
+  jwtSecret: string
 ): Promise<{ user: UserPublic; token: string } | { error: string }> {
   const data = await kv.get(userKey(username));
   if (!data) return { error: "Invalid username or password" };
@@ -233,7 +254,7 @@ export async function loginUser(
   user.lastLogin = new Date().toISOString();
   await kv.put(userKey(username), JSON.stringify(user));
 
-  const token = await createJWT({ sub: user.id, username: user.username }, "stock-ai-jwt-secret-v1-change-in-prod");
+  const token = await createJWT({ sub: user.id, username: user.username }, jwtSecret);
 
   return { user: toPublic(user), token };
 }
