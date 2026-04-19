@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api, saveAuth, getAuth, logout, type UserPublic } from "./api";
-import VegaApp from "./VegaApp";
+import VegaApp from "./VegaApp.jsx";
 
 // ─── Auth Styles ──────────────────────────────────────
 const AUTH_CSS = `

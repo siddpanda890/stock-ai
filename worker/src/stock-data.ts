@@ -260,16 +260,16 @@ export async function getMarketMovers(): Promise<{
 }> {
   const symbols = {
     gainers: [
-      "^GSPC",
-      "^IXIC",
-      "^DJI",
-      "AAPL",
-      "MSFT",
-      "GOOGL",
-      "AMZN",
-      "NVDA",
-      "META",
-      "TSLA",
+      "^NSEI",
+      "^BSESN",
+      "^NSEBANK",
+      "^CNXIT",
+      "RELIANCE.NS",
+      "TCS.NS",
+      "HDFCBANK.NS",
+      "INFY.NS",
+      "ICICIBANK.NS",
+      "TATAMOTORS.NS",
     ],
   };
 

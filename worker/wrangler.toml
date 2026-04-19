@@ -7,13 +7,13 @@ compatibility_flags = ["nodejs_compat"]
 VERTEX_PROJECT_ID = "gen-lang-client-0915982142"
 VERTEX_LOCATION = "us-east5"
 CORS_ORIGIN = "https://dash.vegatrade.in,https://vegatrade.in,https://stock-ai-dashboard.pages.dev,https://vegatrade-landing.pages.dev"
-JWT_SECRET = "stock-ai-jwt-secret-v1-change-in-prod"
 
 [[kv_namespaces]]
 binding = "STOCK_AI_KV"
 id = "84ce047e5f59457da68c98d9b4f10196"
 
 # Secrets (set via wrangler secret put):
+# JWT_SECRET
 # VERTEX_SERVICE_ACCOUNT_JSON
 # ANTHROPIC_API_KEY
 # GOOGLE_API_KEY

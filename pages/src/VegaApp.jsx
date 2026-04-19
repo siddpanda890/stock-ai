@@ -4,6 +4,9 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart
 } from "recharts";
 import { api } from "./api";
+import { DEFAULT_SYMBOLS, INDEX_NAMES, INDEX_SYMBOLS } from "./marketConfig";
+import { getMarketStatus } from "./marketStatus";
+import { useMarketStatus } from "./useMarketStatus";
 
 // ═══════════════════════════════════════════════════════════════
 //  THEME SYSTEM
@@ -34,11 +37,6 @@ const ThemeCtx = createContext({ theme: "dark", toggle: () => {} });
 // ═══════════════════════════════════════════════════════════════
 //  CONSTANTS
 // ═══════════════════════════════════════════════════════════════
-const DEFAULT_SYMBOLS = ["RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","HINDUNILVR.NS","ITC.NS","WIPRO.NS","AXISBANK.NS","BAJFINANCE.NS","TATAMOTORS.NS","SUNPHARMA.NS","ADANIENT.NS","MARUTI.NS","KOTAKBANK.NS"];
-
-const INDEX_SYMBOLS = ["^NSEI","^BSESN","^NSEBANK","^CNXIT"];
-const INDEX_NAMES = {"^NSEI":"NIFTY 50","^BSESN":"SENSEX","^NSEBANK":"BANKNIFTY","^CNXIT":"NIFTY IT"};
-
 const SMETA = {
   momentum:   { name:"Momentum",       color:"#00e87a", desc:"EMA 9/21 crossover + RSI"         },
   supertrend: { name:"SuperTrend",     color:"#ffab30", desc:"ATR flip signals"                  },
@@ -50,53 +48,6 @@ const SMETA = {
 // ═══════════════════════════════════════════════════════════════
 //  MARKET HOURS (NSE/BSE: Mon-Fri 9:15 AM – 3:30 PM IST)
 // ═══════════════════════════════════════════════════════════════
-// NSE public holidays for 2026 (update annually)
-const NSE_HOLIDAYS_2026 = new Set([
-  "2026-01-26","2026-02-17","2026-03-10","2026-03-30","2026-03-31",
-  "2026-04-02","2026-04-14","2026-04-17","2026-05-01","2026-06-26",
-  "2026-07-07","2026-08-15","2026-08-25","2026-10-02","2026-10-20",
-  "2026-10-23","2026-11-04","2026-11-09","2026-12-25",
-]);
-
-function getMarketStatus() {
-  const now = new Date();
-  // Convert to IST (UTC+5:30)
-  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const day = ist.getDay(); // 0=Sun, 6=Sat
-  const hh = ist.getHours();
-  const mm = ist.getMinutes();
-  const timeMin = hh * 60 + mm; // minutes since midnight IST
-  const dateStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,"0")}-${String(ist.getDate()).padStart(2,"0")}`;
-
-  const OPEN = 9 * 60 + 15;   // 9:15 AM = 555
-  const CLOSE = 15 * 60 + 30; // 3:30 PM = 930
-
-  const isWeekday = day >= 1 && day <= 5;
-  const isHoliday = NSE_HOLIDAYS_2026.has(dateStr);
-  const inHours = timeMin >= OPEN && timeMin < CLOSE;
-
-  const isOpen = isWeekday && !isHoliday && inHours;
-
-  // Time until next open/close
-  let nextEvent = "";
-  let minutesUntil = 0;
-  if (isOpen) {
-    minutesUntil = CLOSE - timeMin;
-    const h = Math.floor(minutesUntil / 60);
-    const m = minutesUntil % 60;
-    nextEvent = `closes in ${h}h ${m}m`;
-  } else if (isWeekday && !isHoliday && timeMin < OPEN) {
-    minutesUntil = OPEN - timeMin;
-    const h = Math.floor(minutesUntil / 60);
-    const m = minutesUntil % 60;
-    nextEvent = `opens in ${h}h ${m}m`;
-  } else {
-    nextEvent = "closed";
-  }
-
-  return { isOpen, isWeekday, isHoliday, inHours, nextEvent, dateStr, timeMin, OPEN, CLOSE };
-}
-
 // ═══════════════════════════════════════════════════════════════
 //  TECHNICAL INDICATORS
 // ═══════════════════════════════════════════════════════════════
@@ -113,7 +64,7 @@ const TA = {
     return 100-100/(1+g/(l||1e-6));
   },
   atr(candles, p=14) {
-    if (candles.length<2) return candles[0]?.close*0.015??10;
+    if (candles.length<2) return candles[0] ? candles[0].close * 0.015 : 10;
     const trs=candles.slice(1).map((c,i)=>Math.max(c.high-c.low,Math.abs(c.high-candles[i].close),Math.abs(c.low-candles[i].close)));
     return trs.slice(-p).reduce((a,b)=>a+b,0)/Math.min(p,trs.length);
   },
@@ -139,7 +90,8 @@ const TA = {
     return {trend, line:trend===1?lower:upper, atr:a};
   },
   chandelier(candles, p=14, m=2.0) {
-    if (candles.length<p) return candles.at(-1)?.close*0.97??0;
+    const lastCandle = candles.at(-1);
+    if (candles.length<p) return lastCandle ? lastCandle.close * 0.97 : 0;
     return Math.max(...candles.slice(-p).map(c=>c.high)) - m*TA.atr(candles,p);
   },
   vwap(candles) {
@@ -203,20 +155,6 @@ function posSize(capital, riskPct, entry, sl) {
   const rAmt=capital*(riskPct/100), rPerShare=Math.abs(entry-sl);
   return Math.max(1, Math.floor(rAmt/(rPerShare||entry*.01)));
 }
-function makeCandle(prev, vol=.004) {
-  const drift=(Math.random()-.488)*prev.close*vol;
-  const open=prev.close, close=Math.max(open*.9,open+drift);
-  return { time:new Date().toLocaleTimeString("en-IN"), open, close,
-    high:Math.max(open,close)*(1+Math.random()*vol*.5),
-    low :Math.min(open,close)*(1-Math.random()*vol*.5),
-    volume:Math.floor(Math.random()*50000+8000) };
-}
-function genHistory(base, n=80) {
-  let last={close:base,high:base,low:base,open:base,volume:20000,time:""};
-  const arr=[];
-  for(let i=n;i>=0;i--){last=makeCandle(last,.005);last.time=new Date(Date.now()-i*60000).toLocaleTimeString("en-IN");arr.push({...last});}
-  return arr;
-}
 const fmt = {
   inr:n=>"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}),
   usd:n=>"$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),
@@ -245,6 +183,8 @@ export default function VegaApp({ user, onLogout }) {
   // ── state ────────────────────────────────────────────────────
   const [market, setMarket] = useState({});
   const [marketLoading, setMarketLoading] = useState(true);
+  const [marketErrors, setMarketErrors] = useState([]);
+  const [indexErrors, setIndexErrors] = useState([]);
   const [watchlistSymbols, setWatchlistSymbols] = useState(DEFAULT_SYMBOLS);
   const [indices,  setIndices]  = useState([]);
   // ── Positions: session-only (NOT in localStorage) ──
@@ -294,6 +234,7 @@ export default function VegaApp({ user, onLogout }) {
   const aiEnd=useRef(null);
   const posRef=useRef(positions), mktRef=useRef(market), portRef=useRef(portfolio), engRef=useRef(engine);
   posRef.current=positions; mktRef.current=market; portRef.current=portfolio; engRef.current=engine;
+  const marketStatus = useMarketStatus();
 
   // ── load market data on mount ──────────────────────────────────
   useEffect(() => {
@@ -314,46 +255,44 @@ export default function VegaApp({ user, onLogout }) {
               return { sym, quote, history };
             } catch (e) {
               console.error(`Failed to load ${sym}:`, e);
-              // Fallback to mock data if API fails
-              const basePrice = 1000 + Math.random() * 5000;
-              return { sym, quote: null, history: null, fallback: true, basePrice };
+              return { sym, error: e instanceof Error ? e.message : "Failed to load market data" };
             }
           })
         );
 
         // Process results
+        const failedSymbols = [];
         results.forEach((result) => {
           if (result.status === "fulfilled") {
-            const { sym, quote, history, fallback, basePrice } = result.value;
+            const { sym, quote, history, error } = result.value;
+            if (error || !quote || !Array.isArray(history) || history.length === 0) {
+              failedSymbols.push(sym);
+              return;
+            }
             let candles = [];
-            let last = quote?.price || basePrice;
-            let prevClose = quote?.previousClose || basePrice;
-            let change = quote?.change || 0;
-            let changePct = quote?.changePercent || 0;
+            let last = quote.price;
+            let prevClose = quote.previousClose || quote.price;
+            let change = quote.change || 0;
+            let changePct = quote.changePercent || 0;
 
             // Convert history to candle format the TA module expects
-            if (history && Array.isArray(history) && history.length > 0) {
-              candles = history
-                .filter(h => h.close > 0) // filter null/zero candles
-                .map(h => ({
-                  time: h.date || "",
-                  open: h.open || h.close,
-                  high: h.high || h.close,
-                  low: h.low || h.close,
-                  close: h.close,
-                  volume: h.volume || 10000
-                }))
-                .slice(-80); // Keep last 80 candles
-            } else if (fallback) {
-              // Generate fallback data
-              candles = genHistory(basePrice);
-            }
+            candles = history
+              .filter(h => h.close > 0)
+              .map(h => ({
+                time: h.date || "",
+                open: h.open || h.close,
+                high: h.high || h.close,
+                low: h.low || h.close,
+                close: h.close,
+                volume: h.volume || 10000
+              }))
+              .slice(-80);
 
             if (candles.length > 0) {
               const closes = candles.map(c => c.close);
               marketData[sym] = {
                 sym,
-                name: quote?.name || sym.replace(".NS",""),
+                name: quote.name || sym.replace(".NS",""),
                 basePrice: prevClose,
                 sector: "NSE",
                 candles,
@@ -363,20 +302,23 @@ export default function VegaApp({ user, onLogout }) {
                 changePct,
                 rsi: TA.rsi(closes),
                 atr: TA.atr(candles),
-                vwap: TA.vwap(candles),
-                simulated: fallback || !quote
+                vwap: TA.vwap(candles)
               };
+            } else {
+              failedSymbols.push(sym);
             }
           }
         });
 
         setMarket(marketData);
+        setMarketErrors(failedSymbols);
 
         // Load indices
         const indicesResults = await Promise.allSettled(
           INDEX_SYMBOLS.map(sym => api.getQuote(sym))
         );
         const indicesData = [];
+        const failedIndices = [];
         indicesResults.forEach((result, i) => {
           if (result.status === "fulfilled") {
             const quote = result.value;
@@ -388,18 +330,11 @@ export default function VegaApp({ user, onLogout }) {
               changePct: quote.changePercent || 0
             });
           } else {
-            // Fallback mock index
-            const mockBase = 50000 + Math.random() * 10000;
-            indicesData.push({
-              name: INDEX_NAMES[INDEX_SYMBOLS[i]] || INDEX_SYMBOLS[i],
-              symbol: INDEX_SYMBOLS[i],
-              base: mockBase,
-              current: mockBase * (1 + (Math.random() - 0.5) * 0.02),
-              changePct: (Math.random() - 0.5) * 2
-            });
+            failedIndices.push(INDEX_SYMBOLS[i]);
           }
         });
         setIndices(indicesData);
+        setIndexErrors(failedIndices);
 
         // Load portfolio from backend — backend KV is the SINGLE SOURCE OF TRUTH for cash
         try {
@@ -429,6 +364,17 @@ export default function VegaApp({ user, onLogout }) {
 
     loadMarketData();
   }, [watchlistSymbols]);
+
+  useEffect(() => {
+    const availableSymbols = Object.keys(market);
+    if (!availableSymbols.length) return;
+
+    if (!market[selSym]) {
+      setSelSym(availableSymbols[0]);
+    }
+
+    setOrderForm((prev) => (market[prev.sym] ? prev : { ...prev, sym: availableSymbols[0] }));
+  }, [market, selSym]);
 
   // ── market tick (fetch quotes every 30 seconds) ─────────────────
   useEffect(() => {
@@ -673,11 +619,6 @@ export default function VegaApp({ user, onLogout }) {
   }, [engine.autoSchedule, addLog]); // engine.running intentionally excluded — read via ref
 
   // ── Market status for display ──────────────────────────────
-  const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
-  useEffect(() => {
-    const id = setInterval(() => setMarketStatus(getMarketStatus()), 15000);
-    return () => clearInterval(id);
-  }, []);
 
   // ── AI ────────────────────────────────────────────────────────
   async function sendAI(msg){
@@ -727,6 +668,10 @@ User asks: ${msg}`;
     e.preventDefault();
     const side=forceSide||orderForm.side;
     const st=market[orderForm.sym], price=st?.last||0, qty=Math.max(1,parseInt(orderForm.qty)||1);
+    if (!st || price <= 0) {
+      addLog(`Market data unavailable for ${orderForm.sym}. Order skipped.`, "loss");
+      return;
+    }
     const atr=st?.atr||price*.01;
     if(side==="BUY"){
       openPos(orderForm.sym,"LONG",price,price-engine.atrMult*atr,price+engine.atrMult*1.5*atr,"manual",qty,"Manual BUY");
@@ -737,9 +682,11 @@ User asks: ${msg}`;
   }
 
   // ── chart data ────────────────────────────────────────────────
-  const selSt=market[selSym];
+  const availableSymbols = Object.keys(market);
+  const activeSymbol = market[selSym] ? selSym : availableSymbols[0];
+  const selSt = activeSymbol ? market[activeSymbol] : null;
   const chartPts=selSt?.candles.slice(-50).map(c=>({t:c.time.slice(0,5),p:+c.close.toFixed(2),v:c.volume}))||[];
-  const selPos=positions.find(p=>p.sym===selSym);
+  const selPos=positions.find(p=>p.sym===activeSymbol);
   // currentValue is already computed above as a derived value
   const drawdown=portfolio.peakCapital>0&&portfolio.trades>0?Math.max(0,((portfolio.peakCapital-currentValue)/portfolio.peakCapital)*100):0;
   const winRate=portfolio.trades>0?(portfolio.wins/portfolio.trades*100).toFixed(0):"—";
@@ -1534,12 +1481,12 @@ User asks: ${msg}`;
           </div>
         ) : (
           <>
-            {tab==="engine"    && EngineTab()}
-            {tab==="positions" && PositionsTab()}
-            {tab==="scanner"   && ScannerTab()}
-            {tab==="ai"        && AITab()}
-            {tab==="orders"    && OrdersTab()}
-            {tab==="settings"  && SettingsTab()}
+            {tab==="engine"    && <EngineTab/>}
+            {tab==="positions" && <PositionsTab/>}
+            {tab==="scanner"   && <ScannerTab/>}
+            {tab==="ai"        && <AITab/>}
+            {tab==="orders"    && <OrdersTab/>}
+            {tab==="settings"  && <SettingsTab/>}
           </>
         )}
       </div>
