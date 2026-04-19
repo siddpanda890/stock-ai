@@ -9,7 +9,7 @@ export const DEFAULT_SYMBOLS = [
   "WIPRO.NS",
   "AXISBANK.NS",
   "BAJFINANCE.NS",
-  "TATAMOTORS.NS",
+  "SBIN.NS",
   "SUNPHARMA.NS",
   "ADANIENT.NS",
   "MARUTI.NS",

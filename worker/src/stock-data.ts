@@ -269,7 +269,7 @@ export async function getMarketMovers(): Promise<{
       "HDFCBANK.NS",
       "INFY.NS",
       "ICICIBANK.NS",
-      "TATAMOTORS.NS",
+      "SBIN.NS",
     ],
   };
 
